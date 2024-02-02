@@ -10,6 +10,7 @@ Department of Electrical and Computer Engineering, University of Maryland
 import time
 import numpy as np
 from numba import njit
+import copy
 import matplotlib.pyplot as plt
 import pylab as pl
 # import concurrent.futures
@@ -23,7 +24,7 @@ np.random.seed(13)
 ODA Parameters
 
 
-###Data
+### Data
 
 - train_data 
     # Single layer: [[np.array], [np.array], [np.array], ...]
@@ -180,6 +181,7 @@ class ODA:
         
         
         ### Keep archive to pass multi-resolution parameters to children
+        # !!! Revisit copy vs deepcopy here
         
         # Data
         self.train_data_arxiv = train_data.copy()
@@ -212,13 +214,14 @@ class ODA:
         ### State Parameters
         
         # Codevectors        
-        self.y = []
-        self.ylabels = []
-        self.py = []
-        self.sxpy= []
+        self.y = [] # locations of codevectors
+        self.ylabels = [] # labels of codevectors
+        self.yext = [] # external variables to carry along
+        self.py = [] # probabilities of codevectors
+        self.sxpy= [] 
         self.slpy= []
         self.old_y = []
-        self.K = len(self.y)
+        self.K = len(self.y) # number of codevectors
         
         # self.classes = list(np.unique(train_labels))
         # # Create one codevector for each class known
@@ -276,11 +279,13 @@ class ODA:
         self.myT = [self.T]
         self.myY = [self.y.copy()]
         self.myYlabels = [self.ylabels.copy()]
+        self.myYext = [copy.deepcopy(self.yext)]
         self.myTrainError = [1]
         self.myTestError = [1]
         self.myLoops = [0]    
-        self.myTime = [0]
+        self.myTime = [time.perf_counter()]
         self.myTreeK = [self.K]
+        self.myTreeLoops = [0]
         
         # Counters
         self.last_sample = 0 # sample at which last convergence occured
@@ -315,7 +320,7 @@ class ODA:
         fit_sample = 0
         datalen = len(train_data)
         
-        self.tik = time.perf_counter()
+        self.myTime[-1] = time.perf_counter()
         
         ## Whlie the entire tree is not trained
         while not self.trained: 
@@ -338,7 +343,7 @@ class ODA:
     ###########################################################################
     def train(self,train_data,train_labels,test_data=[],test_labels=[]):
         
-        self.tik = time.perf_counter()
+        self.myTime[-1]  = time.perf_counter()
         
         ## Whlie the entire tree is not trained
         for idx in range(len(train_data)): 
@@ -357,9 +362,9 @@ class ODA:
                    train_data=[],train_labels=[], test_data=[],test_labels=[]):
         
         ## For Debugging
-        # stop_timeline,len_timeline = self.check_timeline_limit()
-        # if stop_timeline:
-        #     self.trained=True
+        stop_timeline,len_timeline = self.check_timeline_limit()
+        if stop_timeline:
+            self.trained=True
             
         if not self.trained:
             
@@ -379,7 +384,7 @@ class ODA:
                 else:
                     ## if just trained, report time
                     self.tok = time.perf_counter()
-                    self.myTime.append(self.tok-self.tik)
+                    self.myTime.append(self.tok)
             
             else: ## Otherwise, train this cell
                     
@@ -411,7 +416,7 @@ class ODA:
                     ## Find effective codevectors
                     if self.lvq<2:
                         self.find_effective_clusters() 
-                    if self.lvq<2:
+                    if self.lvq<2 and not self.regression:
                         self.pop_idle_clusters() 
                     self.prune_siblings()  
                     
@@ -419,7 +424,7 @@ class ODA:
                     stop_K = self.K>self.Kmax
                     if stop_K:
                         
-                        self.overwrite_codevectors(self.myY[-1].copy(), self.myYlabels[-1].copy())
+                        self.overwrite_codevectors(self.myY[-1].copy(), self.myYlabels[-1].copy(),copy.deepcopy(self.myYext[-1]))
                         self.T = self.myT[-1]
                         
                         # self.current_sample = self.myLoops[-1]
@@ -433,8 +438,9 @@ class ODA:
                     self.myK.append(self.K) 
                     self.myY.append(self.y.copy())
                     self.myYlabels.append(self.ylabels.copy())
+                    self.myYext.append(copy.deepcopy(self.yext))
                     self.myLoops.append(self.current_sample)
-                    self.myTime.append(self.tok-self.tik)
+                    self.myTime.append(self.tok)
                     self.put_in_timeline(self.id.copy())
                     
                     ## Check criteria to stop training self and split, if possible
@@ -458,9 +464,10 @@ class ODA:
                     if self.keepscore>2:
                         
                         tK = self.treeK()
+                        tL = self.treeLoops()
                         print(f'{len_timeline} -- ID: {self.id}: '+ 
-                              f'Samples: {self.current_sample}(+{self.current_sample-self.last_sample}): ' +
-                              f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, [+{self.myTime[-1]:.1f}s]')
+                              f'Samples: {tL}(+{self.current_sample-self.last_sample}): ' +
+                              f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, t = {self.myTime[-1]-self.myTime[0]:.1f} [+{self.myTime[-1]-self.myTime[-2]:.1f}s]')
                         if not stop_K:
                             print(f'Train Error: {d_train:.4f}')
                             if len(test_data)>0:
@@ -475,9 +482,10 @@ class ODA:
                         ## Print State
                         if self.keepscore==1:
                             tK = self.treeK()
+                            tL = self.treeLoops()
                             print(f'{len_timeline} -- ID: {self.id}: '+
-                                    f'Samples: {self.current_sample}(+{self.current_sample-self.last_sample}): ' +
-                                    f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, [+{self.myTime[-1]:.1f}s]')
+                                    f'Samples: {tL}(+{self.current_sample-self.last_sample}): ' +
+                                    f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, t = {self.myTime[-1]-self.myTime[0]:.1f} [+{self.myTime[-1]-self.myTime[-2]:.1f}s]')
                             
                             d_train = self.score(train_data,train_labels)
                             self.myTrainError.append(d_train)
@@ -518,7 +526,7 @@ class ODA:
                     self.update_T()
                     self.perturbed=False
                     
-                    self.tik = time.perf_counter()
+                    # self.tik = time.perf_counter()
         
     # Stochastic Approximation Step
     ###########################################################################
@@ -667,6 +675,7 @@ class ODA:
             self.slpy[i] = self.py[i]*self.ylabels[i]
             self.y.append(new_yi)
             self.ylabels.append(self.ylabels[i]) 
+            self.yext.append(copy.deepcopy(self.yext[i])) 
             self.py.append(self.py[i])
             self.sxpy.append(self.py[i]*new_yi)
             self.slpy.append(self.py[i]*self.ylabels[i])
@@ -713,6 +722,7 @@ class ODA:
                     self.slpy[i] = self.ylabels[i]*self.py[i]
                     self.y.pop(j)
                     self.ylabels.pop(j)
+                    self.yext.pop(j)
                     self.py.pop(j)
                     self.sxpy.pop(j)
                     self.slpy.pop(j)
@@ -723,9 +733,10 @@ class ODA:
     
     # Insert Codevector
     ###########################################################################
-    def insert_codevector(self,datum,datum_label,datum_py=[],norm=False): 
+    def insert_codevector(self,datum,datum_label,datum_py=[],datum_ext=[],norm=False): 
         self.y.append(datum)
         self.ylabels.append(datum_label)
+        self.yext.append(copy.deepcopy(datum_ext))
         if datum_py==[]:
             self.py.append(1.0)
         else:
@@ -744,6 +755,7 @@ class ODA:
     def pop_codevector(self,idx,norm=False): 
         self.y.pop(idx)
         self.ylabels.pop(idx)
+        self.yext.pop(idx)
         self.py.pop(idx)
         self.sxpy.pop(idx)
         self.slpy.pop(idx)
@@ -776,9 +788,11 @@ class ODA:
     
     # Overwrite Existing Codevectors (for External Use)
     ###########################################################################
-    def overwrite_codevectors(self,new_y,new_ylabels,new_py=[]): # new_y must be a list
+    def overwrite_codevectors(self,new_y,new_ylabels,new_ext,new_py=[]): # new_y must be a list
         self.y = new_y
         self.ylabels = new_ylabels
+        if new_ext!=[]:
+            self.yext = copy.deepcopy(new_ext)
         if new_py==[]:
             self.py = [1.0 / len(self.y) for i in range(len(self.y))] 
         else:
@@ -834,7 +848,8 @@ class ODA:
                 keepscore=self.keepscore,
                 jit = self.jit)
                 )
-    
+            
+            self.children[-1].yext=copy.deepcopy(self.yext[i])
     
     # Calculate Nodes of the Tree
     ###########################################################################
@@ -852,8 +867,24 @@ class ODA:
             tK = node.treeK(sub=True)
             node.myTreeK.append(tK)
             return tK
-    
-    
+        
+    # Calculate Loops of the Tree
+    ###########################################################################
+    def treeLoops(self,sub=False):
+        
+        if sub:
+            if len(self.children)>0:
+                return self.myLoops[-1] + np.sum([child.treeLoops(sub=True) for child in self.children])
+            else:
+                return self.myLoops[-1]
+        else:
+            node = self
+            while node.parent:
+               node = node.parent
+            tL = node.treeLoops(sub=True)
+            node.myTreeLoops.append(tL)
+            return tL
+        
     # Check if Node and All Children are Trained
     ###########################################################################
     def check_trained(self):
@@ -898,7 +929,7 @@ class ODA:
             if self.parent:
                 if (not self.regression) and len(np.unique(self.parent.myYlabels[-1]))>1:
                     if len(np.unique(self.ylabels))==1:
-                        self.overwrite_codevectors([self.y[0]],[self.ylabels[0]])
+                        self.overwrite_codevectors([self.y[0]],[self.ylabels[0]],[copy.deepcopy(self.yext[0])])
                         self.trained = True
                         if self.keepscore>2:
                             print('*** Same-Class Codevectors Pruned ***')
@@ -907,7 +938,7 @@ class ODA:
             if self.parent:
                 for sibling in self.parent.children:
                     if sibling.current_sample == 0:
-                        sibling.overwrite_codevectors([sibling.y[0]],[sibling.ylabels[0]])
+                        sibling.overwrite_codevectors([sibling.y[0]],[sibling.ylabels[0]],[copy.deepcopy(sibling.yext[0])])
                         sibling.trained = True
                         if self.keepscore>2:
                             print('*** Idle Sibling Pruned ***')
@@ -920,7 +951,7 @@ class ODA:
         if self.parent:
             for sibling in self.parent.children:
                 if sibling.current_sample == 0:
-                    sibling.overwrite_codevectors([sibling.y[0]],[sibling.ylabels[0]])
+                    sibling.overwrite_codevectors([sibling.y[0]],[sibling.ylabels[0]],[copy.deepcopy(sibling.yext[0])])
                     sibling.trained = True
                     if self.keepscore>2:
                         print('*** Idle Sibling Pruned ***')
@@ -960,7 +991,7 @@ class ODA:
     
     # Compute Score
     ###########################################################################
-    def score(self, data, labels):
+    def score(self, data, labels, recursive=1e3):
         if self.parent:
             return self.parent.score(data, labels)
         else:
@@ -968,23 +999,23 @@ class ODA:
             d = 0.0
             for i in range(len(data)):
                 if self.regression:
-                    d += self.datum_regression_error(data[i], labels[i])         
+                    d += self.datum_regression_error(data[i], labels[i], recursive)         
                 elif classification:
-                    d += self.datum_classification_error(data[i], labels[i])
+                    d += self.datum_classification_error(data[i], labels[i], recursive)
                 else:
-                    d += self.datum_dissimilarity(data[i], labels[i])         
+                    d += self.datum_dissimilarity(data[i], labels[i], recursive)         
             return d/len(data) #if classification else d      
     
     
     # Compute Dissimilarity between Codebook and Input Vector
     ###########################################################################
-    def datum_dissimilarity(self, datum, label):
+    def datum_dissimilarity(self, datum, label, recursive=1e3):
     
         y = self.myY[-1]
         j,d = self.winner(np.array(y), np.array(datum[self.resolution]))
         
-        if len(self.children) > 0 and len(self.children[j].myY)>1:
-            return self.children[j].datum_dissimilarity(datum,label)
+        if recursive>0 and len(self.children) > 0 and len(self.children[j].myY)>1:
+            return self.children[j].datum_dissimilarity(datum,label,recursive-1)
         else:
             return d   
     
@@ -1019,14 +1050,14 @@ class ODA:
     
     # Compute Classification Error between Codebook and Input Vector 
     ###########################################################################
-    def datum_classification_error(self, datum, label):
+    def datum_classification_error(self, datum, label, recursive=1e3):
         
         y = self.myY[-1]
         j,_ = self.winner(np.array(y), np.array(datum[self.resolution]))
         
         ## if I have children and the winner child has converged at least once
-        if len(self.children)>0 and len(self.children[j].myY)>1: 
-            return self.children[j].datum_classification_error(datum,label)
+        if recursive>0 and len(self.children)>0 and len(self.children[j].myY)>1: 
+            return self.children[j].datum_classification_error(datum,label,recursive-1)
         else:
             decision_label = self.myYlabels[-1][j]
             d = 0 if np.all(decision_label == label) else 1
@@ -1034,13 +1065,13 @@ class ODA:
     
     # Compute Regression Error between Codebook and Input Vector
     ###########################################################################
-    def datum_regression_error(self, datum, label):
+    def datum_regression_error(self, datum, label, recursive=1e3):
     
         y = self.myY[-1]
         j,d = self.winner(np.array(y), np.array(datum[self.resolution]))
         
-        if len(self.children) > 0 and len(self.children[j].myY)>1:
-            return self.children[j].datum_dissimilarity(datum,label)
+        if recursive>0 and len(self.children) > 0 and len(self.children[j].myY)>1:
+            return self.children[j].datum_dissimilarity(datum,label,recursive-1)
         else:
             decision_label = self.myYlabels[-1][j]
             d = self.BregmanD(label, decision_label) 
@@ -1063,7 +1094,49 @@ class ODA:
         else:
             decision_label = self.myYlabels[-1][j]
             return decision_label    
+    
+    # Voronoi
+    ###########################################################################
+    def voronoi(self,ctr=-1,points=[],recursive=0,child_ctr=[],add_parent=True):
         
+        # def proj_back(x):
+        #     u = np.array([1,1])
+        #     u = u/np.linalg.norm(u)
+        #     x = np.array(x)
+        #     return np.array(u*x)
+        
+        centroids = self.myY[ctr]
+        # if len(centroids[0])<2:
+        #     centroids = [proj_back(cd) for cd in centroids]
+        
+        if len(points)==0:
+            delta=0.005
+            xm = np.arange(0.0, 1.0, delta)
+            ym = np.arange(0.0, 1.0, delta)
+            points = [np.array([xi,yi]) for xi in xm for yi in ym]
+        
+        edges = []
+        regions = [[] for i in range(len(centroids))]
+        for di in points:
+            dists = [self.BregmanD(di,np.array(yj)) for yj in centroids]
+            idx = np.argsort(dists)
+            j = idx[0]
+            regions[j].append(di)
+            if len(dists)>1 and np.abs(dists[idx[0]]-dists[idx[1]])<2*1e-0*self.myT[ctr]:
+                edges.append(di)
+        
+        if not add_parent:
+            edges = []
+        
+        if recursive>0 and len(self.children)>0:
+            if len(child_ctr)==0:
+                child_ctr = [-1 for i in range(len(self.children))]
+            for i in range(len(self.children)):
+                child = self.children[i]
+                edges=edges + child.voronoi(ctr=child_ctr[i],points=regions[i],recursive=recursive-1)
+        
+        return edges
+    
     # Bregman Divergences (Python Implementation)
     ###########################################################################
     def BregmanD(self,x, y):
@@ -1131,9 +1204,9 @@ class ODA:
 
     def plot_curve(self,figname,show = False,save = False,
                     # Parameters
-                    fig_size=(12, 8),
-                    font_size = 38,
-                    label_size = 38,
+                    fig_size=(8,6),
+                    font_size = 28,
+                    label_size = 20,
                     legend_size = 32,
                     line_width = 12,
                     marker_size = 8,
@@ -1151,6 +1224,7 @@ class ODA:
         idx = []
         myK = []
         tK=[]
+        tL=[]
         myT = []
         myY = []
         myYlabels = []
@@ -1179,6 +1253,7 @@ class ODA:
             
             myK.append(node.myK[node.plt_counter])
             tK.append(self.myTreeK[i+1])
+            tL.append(self.myTreeLoops[i+1])
             myT.append(node.myT[node.plt_counter])
             myY.append(node.myY[node.plt_counter])
             myYlabels.append(node.myYlabels[node.plt_counter])
@@ -1188,63 +1263,111 @@ class ODA:
             myTime.append(node.myTime[node.plt_counter])
             
             node.plt_counter += 1
-            
-        # Figure
+        
+        import matplotlib.colors as mcolors
+        colors = mcolors.TABLEAU_COLORS
+        colors = list(colors.keys())
+        markers = ['s','D','o','X','P']    
+        
+        #######################################################################
+        # Performance VS Time
+        #######################################################################
         
         fig,ax = plt.subplots(figsize=fig_size,tight_layout = {'pad': 1})
         
         # Label axes
-        ax.set_ylim(-0.05,ylim+0.01)
-        ax.set_xlabel('T-epochs '+f'({np.sum(self.myTime):.1f}s)', fontsize = font_size)
-        ylabel = 'Class. Error' if len(self.classes)>1 else 'Ave. Distortion'
+        # ax.set_ylim(-0.05,ylim+0.01)
+        ax.set_xlabel('time (s)', fontsize = font_size)
+        ylabel = '% error' if len(self.classes)>1 else 'distortion (ave.)'
+        ax.set_ylabel(ylabel, fontsize = font_size)
+        ax.tick_params(axis='both', which='major', labelsize=label_size)
+        ax.tick_params(axis='both', which='minor', labelsize=8)
+
+        x= [t - myTime[0] for t in myTime]
+        y=myTrainError
+        clr=colors[0]
+        mrkr = markers[0]
+        ax.plot(x, y, label='Train', 
+          color=clr, marker=mrkr,linestyle='solid', 
+          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+                
+        y=myTestError
+        clr=colors[1]
+        mrkr = markers[1]
+        ax.plot(x, y, label='Test', 
+          color=clr, marker=mrkr,linestyle='solid', 
+          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+
+        plt.legend(loc='lower left',prop={'size': legend_size})
+        
+        y=tL
+        clr=colors[2]
+        mrkr = markers[2]
+        ax2 = ax.twinx()
+        ax2.plot(x, y, label='Samples', 
+          color=clr, marker=mrkr,linestyle='solid', 
+          linewidth=line_width, markersize=marker_size,alpha=line_alpha/5)
+        ax2.set_ylabel('Samples', fontsize = font_size)
+        ax2.tick_params(axis='both', which='major', labelsize=label_size)
+        ax2.tick_params(axis='both', which='minor', labelsize=8)
+        
+        plt.grid(color='gray', linestyle='-', linewidth=1, alpha = 0.1)
+        plt.legend(loc='upper right',prop={'size': legend_size})
+    
+        if save:
+            fig.savefig(figname+'errorVStime.png', format = 'png')
+        if show:
+            plt.show()
+        else:
+            plt.close()
+        
+        #######################################################################
+        # Performance VS K
+        #######################################################################
+        
+        fig,ax = plt.subplots(figsize=fig_size,tight_layout = {'pad': 1})
+        
+        # Label axes
+        # ax.set_ylim(-0.05,ylim+0.01)
+        ax.set_xlabel(r'$-\log(1/T)$', fontsize = font_size)
+        ylabel = '# K'
         ax.set_ylabel(ylabel, fontsize = font_size)
         ax.tick_params(axis='both', which='major', labelsize=label_size)
         ax.tick_params(axis='both', which='minor', labelsize=8)
     
-        x=idx
+        x= [-np.log10(t) for t in myT]
+        y=tK
+        clr=colors[2]
+        mrkr = markers[2]
+        ax.plot(x, y, label='K', 
+          color=clr, marker=mrkr,linestyle='solid', 
+          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+        
+        plt.legend(loc='upper right',prop={'size': legend_size})
+        
         y=myTrainError
-        clr='k'
-        ax.plot(x, y, label='Train', 
-          color=clr, marker='o',linestyle='solid', 
+        clr=colors[0]
+        mrkr = markers[0]
+        ax2 = ax.twinx()
+        ax2.plot(x, y, label='Train', 
+          color=clr, marker=mrkr,linestyle='solid', 
           linewidth=line_width, markersize=marker_size,alpha=line_alpha)
-        # yy = fill_size*np.ones_like(y)
-        # ax.fill_between(x, y+yy, y-yy, facecolor=clr, alpha=line_alpha)
-        # for i, j in zip(np.arange(len(x),step=5),np.arange(len(y),step=5)):
-        #     if y[j]<ylim:
-        #         pl.text(x[i]+txt_x, y[j]+txt_y, str(myK[i]), color=clr, fontsize=txt_size,
-        #                 fontweight=font_weight)    
-                
-        x=idx
         y=myTestError
-        clr='r'
-        ax.plot(x, y, label='Test', 
-          color=clr, marker='o',linestyle='solid', 
+        clr=colors[1]
+        mrkr = markers[1]
+        ax2.plot(x, y, label='Test', 
+          color=clr, marker=mrkr,linestyle='solid', 
           linewidth=line_width, markersize=marker_size,alpha=line_alpha)
-        # yy = fill_size*np.ones_like(y)
-        # ax.fill_between(x, y+yy, y-yy, facecolor=clr, alpha=line_alpha)
-        text_r = True
-        for i, j in zip(np.arange(len(x),step=1),np.arange(len(y),step=1)):
-            # if y[j]<ylim:
-            #     pl.text(x[i]+txt_x, y[j]+txt_y, str(myK[i]), color=clr, fontsize=txt_size,
-            #             fontweight=font_weight)    
-            if i==0:
-                pl.text(x[i]-txt_x, ylim-0.05, 'R'+str(len(self.timeline[i])), color='k', fontsize=txt_size)  
-            if i>0 and len(self.timeline[i-1])<len(self.timeline[i]) and text_r:
-                pl.text(x[i]+2*txt_x, ylim-0.05, 'R'+str(len(self.timeline[i])), color='k', fontsize=txt_size)  
-                if len(self.timeline[i])>2:
-                    text_r = False
-
-        for i in x:
-            if len(self.timeline[i-1])<len(self.timeline[i]):
-                plt.axvline(x=i,c='k')
-            if len(self.timeline[i])>2:
-                break
-
+        ylabel = '% error' if len(self.classes)>1 else 'distortion (ave.)'
+        ax2.set_ylabel(ylabel, fontsize = font_size)
+        ax2.tick_params(axis='both', which='major', labelsize=label_size)
+        ax2.tick_params(axis='both', which='minor', labelsize=8)
+        
         plt.grid(color='gray', linestyle='-', linewidth=1, alpha = 0.1)
-        plt.legend(prop={'size': legend_size})
+        plt.legend(loc='lower left',prop={'size': legend_size})
     
         if save:
-            fig.savefig(figname+'.png', format = 'png')
+            fig.savefig(figname+'TvsK.png', format = 'png')
         if show:
             plt.show()
         else:

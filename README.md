@@ -18,10 +18,11 @@
 ## Contact 
 
 Christos N. Mavridis, Ph.D. \
-Department of Electrical and Computer Engineering, \
-University of Maryland \
+Division of Decision and Control Systems \
+School of Electrical Engineering and Computer Science \
+KTH Royal Institute of Technology \
 https://mavridischristos.github.io/ \
-```mavridis (at) umd.edu``` 
+```mavridis (at) kth.se``` 
 
 ## Description of the Optimization Algorithm
 
@@ -219,32 +220,32 @@ If you use this work in an academic context, please cite the following:
 
 [1] Christos N. Mavridis and John S. Baras, 
 "**[Online Deterministic Annealing for Classification and Clustering](https://arxiv.org/pdf/2102.05836.pdf)**",
-IEEE TCNS, 2022.
+IEEE TCNS, 2023.
 
-    @article{mavridis2022online,
-          title={Online Deterministic Annealing for Classification and Clustering}, 
-          author={Mavridis, Christos N. and Baras, John S.},
-          journal={IEEE Transactions on Neural Networks and Learning Systems},
-          year={2022},
-          volume={},  
-          number={},  
-          pages={1-10},  
-          doi={10.1109/TNNLS.2021.3138676}
-          }
+    @article{mavridis2023learning,
+      author = {Mavridis, Christos and Tirumalai, Amoolya and Baras, John S.},
+      journal = {IEEE Transactions on Control of Network Systems},
+      title = {Learning Swarm Interaction Dynamics From Density Evolution},
+      year = {2023},
+      volume = {10},
+      number = {1},
+      pages = {214-225},
+      publisher = {IEEE},
+    }
 	  
 Other references:
 
 [2] Christos N. Mavridis and John S. Baras, 
 "**[Annealing Optimization for Progressive Learning with Stochastic Approximation](https://mavridischristos.github.io/publications.html)**",
-arXiv:2209.02826.
+IEEE Transaction on Automatic Control, 2023.
 
 [3] Christos N. Mavridis and John S. Baras, 
 "**[Maximum-Entropy Input Estimation for Gaussian Processes in Reinforcement Learning](https://mavridischristos.github.io/publications.html)**",
-CDC, 2021.
+IEEE CDC, 2021.
 
 [4] Christos N. Mavridis and John S. Baras, 
 "**[Progressive Graph Partitioning Based on Information Diffusion](https://mavridischristos.github.io/publications.html)**",
-CDC, 2021.
+IEEE CDC, 2021.
 	
 
 
