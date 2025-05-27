@@ -1,0 +1,9 @@
+.states
+*.db
+*.py[cod]
+*/.DS_Store
+.DS_Store
+.venv
+.web
+__pycache__
+__pycache__/
