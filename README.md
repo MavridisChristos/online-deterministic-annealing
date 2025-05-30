@@ -23,6 +23,18 @@ University of Maryland \
 https://mavridischristos.github.io/ \
 ```mavridis (at) umd.edu``` 
 
+## Setting up the venv
+
+First `cd` to the `e-programma/` directory (not `e_programma/`) and run:
+
+```bash
+conda deactivate # if you need to
+python3 -m venv .venv # if it is the first time
+source .venv/bin/activate
+pip install -r requirements.txt # if it is the first time
+pip install -r requirements-dev.txt # if you need to
+```
+
 ## Description of the Optimization Algorithm
 
 The **observed data** are represented by a random variable 

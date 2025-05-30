@@ -176,7 +176,7 @@ ODA MODEL Parameters
 
 #%% The Class
     
-class ODA:
+class pyODA:
     
     ###########################################################################
     # Init Function
@@ -899,7 +899,7 @@ class ODA:
 
             parent_y = self.myY[-1][i].copy()
             parent_ylabel = self.myYlabels[-1][i]
-            self.children.append(ODA(
+            self.children.append(pyODA(
                 # Data
                 # train_data=[datum], 
                 # train_labels=[datum_label], 
