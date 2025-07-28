@@ -23,7 +23,7 @@ plt.close('all')
 
 #%% Read results
 
-def show(clf,
+def show(clf, train_data, train_labels, 
         res=[0], # resolutions 
         # Plotting Options
         plot_folder = './domain',
@@ -54,10 +54,10 @@ def show(clf,
         node = clf
         for child_id in nid[1:]:
             node=node.children[child_id]    
-        plt_oda(clf=node, res=res, plot_counter=i, bias=len(list(set(res))), 
+        plt_oda(clf=node, train_data=train_data, train_labels=train_labels, res=res, plot_counter=i, bias=len(list(set(res))), 
                 plot_fig=plot_fig, save_fig=save_fig, plot_folder=plot_folder)
             
-def show_instance(clf, instance=0,
+def show_instance(clf, train_data, train_labels, instance=0,
         res=[0], # resolutions 
         # Plotting Options
         plot_folder = './domain',
@@ -90,13 +90,13 @@ def show_instance(clf, instance=0,
         if i != instance:
             node.plt_counter += 1
         else:
-            ax = plt_oda(clf=node, res=res, plot_counter=i, bias=len(list(set(res))), 
+            ax = plt_oda(clf=node, train_data=train_data, train_labels=train_labels, res=res, plot_counter=i, bias=len(list(set(res))), 
                     plot_fig=plot_fig, save_fig=save_fig, plot_folder=plot_folder)
             break
         
     return ax
 
-def show_resolutions(clf,
+def show_resolutions(clf, train_data, train_labels, 
         res=[0], # resolutions 
         # Plotting Options
         plot_folder = './domain',
@@ -112,8 +112,8 @@ def show_resolutions(clf,
     xm = np.arange(0.0, 1.0, delta)
     ym = np.arange(0.0, 1.0, delta)
     mesh_data = [np.array([xmi,ymi]) for xmi in xm for ymi in ym]
-    mesh_data = [[np.array([proj(td)]),td] for td in mesh_data]
-    mesh_data = [[td[r] for r in res] for td in mesh_data]
+    mesh_data = [[np.array(proj(td)),td] for td in mesh_data]
+    # mesh_data = [[td[r] for r in res] for td in mesh_data]
     
         
     ## Plot Data Space for every resolution (0:low, 1:high)
@@ -124,13 +124,13 @@ def show_resolutions(clf,
     #     i+=1
     axs = []
     for i in range(len(res)):
-        ax = plt_oda_resolutions(clf=clf, recursive = i, mesh_data=mesh_data, 
+        ax = plt_oda_resolutions(clf=clf, train_data=train_data, train_labels=train_labels, recursive = i, mesh_data=mesh_data, 
                 plot_fig=plot_fig, save_fig=save_fig, plot_folder=plot_folder)
         axs.append(ax)
     
     return axs
 
-def data(clf,
+def data(clf, train_data, train_labels, 
         res=[0], # resolutions 
         # Plotting Options
         plot_folder = './domain',
@@ -143,11 +143,11 @@ def data(clf,
 
     i=0
     for r in reversed(list(set(res))):
-        plt_data(clf=clf, plot_counter=i, res=r, 
+        plt_data(clf=clf, train_data=train_data, train_labels=train_labels, plot_counter=i, res=r, 
                   plot_fig=plot_fig, save_fig=save_fig, plot_folder=plot_folder)
         i+=1
             
-def show_data(data,labels,
+def show_data(data,labels, 
             # Plotting Options
             plot_folder = './domain',
             plot_fig = False,
@@ -204,7 +204,7 @@ def proj_back(x):
     x = np.array(x)
     return np.array(u*x)
 
-def plt_oda(clf, res, plot_counter=1, bias=0, 
+def plt_oda(clf, train_data, train_labels, res, plot_counter=1, bias=0, 
             plot_fig=False, save_fig=True, plot_folder='.'):
     
     fig = plt.figure()
@@ -218,8 +218,8 @@ def plt_oda(clf, res, plot_counter=1, bias=0,
     while root.parent:
         root = root.parent
     
-    data = [td[-1] for td in root.train_data_arxiv]
-    labels = root.train_labels_arxiv
+    data = [td[-1] for td in train_data]
+    labels = train_labels
     
     # Plot Data   
     
@@ -232,9 +232,9 @@ def plt_oda(clf, res, plot_counter=1, bias=0,
             [y_plot[i][1] for i in range(len(y_plot))],'r^',alpha=aa)
     
     if len(res)>1 and res[0]<res[1] and len(clf.id)<2:
-        data = [proj_back(dt[0]) for dt in clf.train_data_arxiv]
+        data = [proj_back(dt[0]) for dt in train_data]
     
-        labels = clf.train_labels_arxiv
+        labels = train_labels
         
         x_plot = [data[i] for i in range(len(data)) if labels[i] == 0]
         y_plot = [data[i] for i in range(len(data)) if labels[i] == 1]
@@ -255,8 +255,8 @@ def plt_oda(clf, res, plot_counter=1, bias=0,
         clf.plt_counter += 1
         
         # Plot partion at R1 
-        centroids = clf.parent.myY[clf.parent.plt_counter-1]
-        clabels = clf.parent.myYlabels[clf.parent.plt_counter-1]
+        centroids = clf.parent.myX[clf.parent.plt_counter-1]
+        clabels = clf.parent.myLabels[clf.parent.plt_counter-1]
         black_data = []
         red_data = []
         tree_data = [[] for i in clf.parent.children]
@@ -279,8 +279,8 @@ def plt_oda(clf, res, plot_counter=1, bias=0,
         # Plot partion at R2 
         for c in range(len(clf.parent.children)):
             if clf.parent.children[c].plt_counter>0:
-                centroids = clf.parent.children[c].myY[clf.parent.children[c].plt_counter]
-                clabels = clf.parent.children[c].myYlabels[clf.parent.children[c].plt_counter]
+                centroids = clf.parent.children[c].myX[clf.parent.children[c].plt_counter]
+                clabels = clf.parent.children[c].myLabels[clf.parent.children[c].plt_counter]
                 black_data = []
                 red_data = []
                 for datum in tree_data[c]:
@@ -310,8 +310,8 @@ def plt_oda(clf, res, plot_counter=1, bias=0,
     else:
         
         # Plot partion at R1 
-        centroids = clf.myY[clf.plt_counter]
-        clabels = clf.myYlabels[clf.plt_counter]
+        centroids = clf.myX[clf.plt_counter]
+        clabels = clf.myLabels[clf.plt_counter]
         black_data = []
         red_data = []
         for xi in xm:
@@ -346,9 +346,9 @@ def plt_oda(clf, res, plot_counter=1, bias=0,
     plt.text(0.5, 0.015, title, horizontalalignment='center',verticalalignment='center', fontsize=12,fontweight='bold')    
     if len(clf.myTrainError)>clf.plt_counter:
         if len(clf.classes)>1:
-            acctxt = f'Acc.: {1-clf.myTrainError[clf.plt_counter]:.3f}'
+            acctxt = f'Acc.: {1-clf.myTrainError[clf.plt_counter][2]:.3f}'
         else:
-            acctxt = f'Err.: {clf.myTrainError[clf.plt_counter]:.3f}'
+            acctxt = f'Err.: {clf.myTrainError[clf.plt_counter][0]:.3f}'
         plt.text(0.8, 0.95, acctxt, horizontalalignment='center',verticalalignment='center', fontsize=12,fontweight='bold')    
     
     
@@ -368,7 +368,7 @@ def plt_oda(clf, res, plot_counter=1, bias=0,
 
     return ax
 
-def plt_oda_resolutions(clf, recursive=0, mesh_data = [],
+def plt_oda_resolutions(clf, train_data, train_labels, recursive=0, mesh_data = [],
             plot_fig=False, save_fig=True, plot_folder='.'):
     
     ## Figure
@@ -382,8 +382,8 @@ def plt_oda_resolutions(clf, recursive=0, mesh_data = [],
     
     
     # Plot Data   
-    data = [td[-1] for td in clf.train_data_arxiv]
-    labels = clf.train_labels_arxiv
+    data = [td[-1] for td in train_data]
+    labels = train_labels
     
     x_plot = [data[i] for i in range(len(data)) if labels[i] == 0]
     y_plot = [data[i] for i in range(len(data)) if labels[i] == 1]
@@ -396,9 +396,9 @@ def plt_oda_resolutions(clf, recursive=0, mesh_data = [],
     # Plot low D data as well
     if len(data[0])<2 :
         
-        ldata = [proj_back(dt[0]) for dt in clf.train_data_arxiv]
+        ldata = [proj_back(dt[0]) for dt in train_data]
     
-        llabels = clf.train_labels_arxiv
+        llabels = train_labels
         
         x_plot = [ldata[i] for i in range(len(ldata)) if llabels[i] == 0]
         y_plot = [ldata[i] for i in range(len(ldata)) if llabels[i] == 1]
@@ -415,7 +415,7 @@ def plt_oda_resolutions(clf, recursive=0, mesh_data = [],
         black_data = []
         red_data = []
         for di in mesh_data:
-            ci = clf.predict(di,r)
+            ci = clf.predict(di,r)[2]
             if ci == 0:
                 black_data.append(di[-1])
             else:
@@ -427,7 +427,7 @@ def plt_oda_resolutions(clf, recursive=0, mesh_data = [],
                 [r[1] for r in red_data],'rs',alpha=aaa)
 
     # Codevectors
-    centroids,clabels = clf.codebook(recursive)
+    centroids,cy,clabels = clf.codebook(recursive)
     if len(centroids[0])<2:
         centroids = [proj_back(cd) for cd in centroids]
     for i in range(len(centroids)):
@@ -465,16 +465,16 @@ def plt_oda_resolutions(clf, recursive=0, mesh_data = [],
         
     return ax
 
-def plt_data(clf, plot_counter=0, res=0, 
+def plt_data(clf, train_data, train_labels, plot_counter=0, res=0, 
              plot_fig=False, save_fig=True, plot_folder='.'):
     
     fig = plt.figure()
     ax = fig.add_subplot(111, autoscale_on=True, aspect='equal')
     
     # Plot Data   
-    data = [td[-1] for td in clf.train_data_arxiv]
+    data = [td[-1] for td in train_data]
         
-    labels = clf.train_labels_arxiv
+    labels = train_labels
     
     x_plot = [data[i] for i in range(len(data)) if labels[i] == 0]
     y_plot = [data[i] for i in range(len(data)) if labels[i] == 1]
@@ -485,7 +485,7 @@ def plt_data(clf, plot_counter=0, res=0,
             [y_plot[i][1] for i in range(len(y_plot))],'r^',alpha=aa)
     
     if res==0:
-        data = [proj_back(dt[0]) for dt in clf.train_data_arxiv]
+        data = [proj_back(dt[0]) for dt in train_data]
     
         x_plot = [data[i] for i in range(len(data)) if labels[i] == 0]
         y_plot = [data[i] for i in range(len(data)) if labels[i] == 1]

@@ -1,8 +1,9 @@
 """
 Tree-Structured (Multi-Resolution) Online Deterministic Annealing for Classification and Clustering
-Christos Mavridis & John Baras,
-Department of Electrical and Computer Engineering, University of Maryland
-<mavridis@umd.edu>
+Christos Mavridis,
+Department of Electrical Engineering and Computer Science, 
+KTH Royal Institute of Technology
+<mavridis@kth.se>
 """
 
 #%% Import Modules
@@ -21,23 +22,20 @@ np.random.seed(13)
 #%%
 
 '''
-In addition to self.yext, pyoda also supports self.model and self.optimizer. 
-'''
-
-
-'''
 ODA Parameters
 
 
 ### Data
 
-- train_data 
+- train_data_x
     # Single layer: [[np.array], [np.array], [np.array], ...]
     # Multiple Layers/Resolutions: [[np.array, np.array, ...], [np.array, np.array, ...], [np.array, np.array, ...], ...]
+-train_data_y
+    # [ np.array, np.array, np.array, ... ] (np.atleast1d())
 - train_labels
+    # [ 0, 0, 0, ... ] (zero values for clustering)
     # [ int, int , int, ... ] (int values for classification with numba.jit)
-    # [ 0, 0, 0, ... ] (int zero values for clustering)
-    # [ float, float, float, ... ] (and regression=True for piece-wise constant regression)
+    
     
 ### Bregman divergence
 
@@ -114,12 +112,11 @@ ODA Parameters
 
 ### Verbose
 
-- keepscore = 3 
-    # Values in {0,1,2,3}    
-    # 0: don't compute or show score
-    # 1: compute and show score only on tree node splits 
-    # 2: compute score after every SA convergence and use it as a stopping criterion
-    # 3: compute and show score after every SA convergence and use it as a stopping criterion
+- verbose = 2 
+    # Values in {0,1,2}    
+    # 0: don't show score
+    # 1: show score only on tree node splits 
+    # 2: show score after every SA convergence 
 
 ### Numba Jit
 
@@ -149,9 +146,11 @@ ODA MODEL Parameters
 
 # Variables
 
-- self.y = []
-- self.ylabels = []
-- self.yext = []
+- self.x = []
+- self.labels = []
+- self.parameters = []
+- self.model = []
+- self.optimizer = []
 
 - self.py = []
 - self.sxpy= []
@@ -161,9 +160,11 @@ ODA MODEL Parameters
 
 - self.myK 
 - self.myT 
-- self.myY 
-- self.myYlabels 
-- self.myYext 
+- self.myX 
+- self.myLabels 
+- self.myParameters
+- self.myModels
+- self.myOptimizers
 
 - self.myTrainError 
 - self.myTestError 
@@ -173,6 +174,11 @@ ODA MODEL Parameters
 - self.myTreeLoops 
 
 '''
+
+RANDOM_SEED = 13
+DTYPE = np.float64
+REGULATE_THRESHOLD = 5
+PRACTICAL_ZERO = 1e-9
 
 #%% The Class
     
@@ -184,13 +190,19 @@ class ODA:
     
     def __init__(self,
                  # Data
-                 train_data, 
-                 train_labels, 
+                 train_data_x=None, 
+                 train_data_y=None, 
+                 train_labels=None,
+                 # Probability domain
+                 observe_xy = False, 
+                 # Layers
+                 layers = [0],
                  # Bregman divergence
                  Bregman_phi=['phi_Eucl'], # {'phi_Eucl', 'phi_KL'}
                  # Termination
                  Kmax=[100], 
                  timeline_limit = 1e6, 
+                 error_type = [0], # 0:Clustering, 1:Regression, 2:Classification
                  error_threshold=[0.01], 
                  error_threshold_count=[2], 
                  # Temperature
@@ -203,8 +215,7 @@ class ODA:
                  parent=None, 
                  # Regularization
                  lvq=[0], # {0,1,2,3} 
-                 regression=False,
-                 py_cut=[1e-5],  
+                 px_cut=[1e-5],  
                  perturb_param=[1e-1], 
                  effective_neighborhood=[1e-0],
                  # Convergence
@@ -215,86 +226,83 @@ class ODA:
                  bb_init=[0.9],
                  bb_step=[0.9],
                  # Verbose
-                 keepscore=3, # {0,1,2} 
+                 verbose = 2, # 0,1,2
                  # Python or Jit
                  jit = True
                  ):
         
+        # if not train_data_x:
+        #    print("Please provide at least one data sample for initialization.")
+        #    return
+        
+        ### Probability domain  
+        self.observe_xy = observe_xy
+
         ### Tree-Structure Parameters
         
         self.id = node_id.copy()
-        self.resolution = len(node_id)-1
-        self.depth = len(train_data[0]) 
-        self.children = []
         self.parent = parent
+        self.children = []
+
+        self.layers = layers
+        self.nlayers = len(layers)
+        self.mylayer = len(self.id)-1
         self.timeline = [self.id]
-        self.keepscore = keepscore
-        self.regression = regression
-        
-        self.input_len = None
+        self.verbose = verbose
         
         ### Keep archive to pass multi-resolution parameters to children
         # !!! Revisit copy vs deepcopy here
         
         # Data
-        self.train_data_arxiv = train_data.copy()
-        self.train_labels_arxiv = train_labels.copy()
+        # self.train_data_arxiv = train_data.copy()
+        # self.train_labels_arxiv = train_labels.copy()
         # Bregman divergence
-        self.Bregman_phi_arxiv = [Bregman_phi[0] for d in range(self.depth)] if len(Bregman_phi)==1 else Bregman_phi.copy()
+        self.Bregman_phi_arxiv = [Bregman_phi[0]] * self.nlayers if len(Bregman_phi)==1 else Bregman_phi.copy()
         # Termination
-        self.Kmax_arxiv = [Kmax[0] for d in range(self.depth)] if len(Kmax)==1 else Kmax.copy() 
-        self.error_threshold_arxiv = [error_threshold[0] for d in range(self.depth)] if len(error_threshold)==1 else error_threshold.copy()
-        self.error_threshold_count_arxiv = [error_threshold_count[0] for d in range(self.depth)] if len(error_threshold_count)==1 else error_threshold_count.copy() 
+        self.Kmax_arxiv = [Kmax[0]] * self.nlayers if len(Kmax)==1 else Kmax.copy() 
+        self.error_type_arxiv = [error_type[0]] * self.nlayers if len(error_type)==1 else error_type.copy()
+        self.error_threshold_arxiv = [error_threshold[0]] * self.nlayers if len(error_threshold)==1 else error_threshold.copy()
+        self.error_threshold_count_arxiv = [error_threshold_count[0]] * self.nlayers if len(error_threshold_count)==1 else error_threshold_count.copy() 
         # Temperature
-        self.Tmax_arxiv = [Tmax[0] for d in range(self.depth)] if len(Tmax)==1 else Tmax.copy()
-        self.Tmin_arxiv = [Tmin[0] for d in range(self.depth)] if len(Tmin)==1 else Tmin.copy()
-        self.gamma_schedule_arxiv = [gamma_schedule[0].copy() for d in range(self.depth)] if len(gamma_schedule)==1 else gamma_schedule.copy()
-        self.gamma_steady_arxiv = [gamma_steady[0] for d in range(self.depth)] if len(gamma_steady)==1 else gamma_steady.copy()
+        self.Tmax_arxiv = [Tmax[0]] * self.nlayers if len(Tmax)==1 else Tmax.copy()
+        self.Tmin_arxiv = [Tmin[0]] * self.nlayers if len(Tmin)==1 else Tmin.copy()
+        self.gamma_schedule_arxiv = [gamma_schedule[0].copy()] * self.nlayers if len(gamma_schedule)==1 else gamma_schedule.copy()
+        self.gamma_steady_arxiv = [gamma_steady[0]] * self.nlayers if len(gamma_steady)==1 else gamma_steady.copy()
         # Regularization
-        self.lvq_arxiv = [lvq[0] for d in range(self.depth)] if len(lvq)==1 else lvq.copy()
-        self.py_cut_arxiv = [py_cut[0] for d in range(self.depth)] if len(py_cut)==1 else py_cut.copy()
-        self.perturb_param_arxiv = [perturb_param[0] for d in range(self.depth)] if len(perturb_param)==1 else perturb_param.copy()
-        self.effective_neighborhood_arxiv = [effective_neighborhood[0] for d in range(self.depth)] if len(effective_neighborhood)==1 else effective_neighborhood.copy()
+        self.lvq_arxiv = [lvq[0]] * self.nlayers if len(lvq)==1 else lvq.copy()
+        self.py_cut_arxiv = [px_cut[0]] * self.nlayers if len(px_cut)==1 else px_cut.copy()
+        self.perturb_param_arxiv = [perturb_param[0]] * self.nlayers if len(perturb_param)==1 else perturb_param.copy()
+        self.effective_neighborhood_arxiv = [effective_neighborhood[0]] * self.nlayers if len(effective_neighborhood)==1 else effective_neighborhood.copy()
         # Convergence
-        self.em_convergence_arxiv = [em_convergence[0] for d in range(self.depth)] if len(em_convergence)==1 else em_convergence.copy()
-        self.convergence_counter_threshold_arxiv = [convergence_counter_threshold[0] for d in range(self.depth)] if len(convergence_counter_threshold)==1 else convergence_counter_threshold.copy()
-        self.convergence_loops_arxiv = [convergence_loops[0] for d in range(self.depth)] if len(convergence_loops)==1 else convergence_loops.copy()
-        self.stop_separation_arxiv = [stop_separation[0] for d in range(self.depth)] if len(stop_separation)==1 else stop_separation.copy()
-        self.bb_init_arxiv = [bb_init[0] for d in range(self.depth)] if len(bb_init)==1 else bb_init.copy()
-        self.bb_step_arxiv = [bb_step[0] for d in range(self.depth)] if len(bb_step)==1 else bb_step.copy()
-        
+        self.em_convergence_arxiv = [em_convergence[0]] * self.nlayers if len(em_convergence)==1 else em_convergence.copy()
+        self.convergence_counter_threshold_arxiv = [convergence_counter_threshold[0]] * self.nlayers if len(convergence_counter_threshold)==1 else convergence_counter_threshold.copy()
+        self.convergence_loops_arxiv = [convergence_loops[0]] * self.nlayers if len(convergence_loops)==1 else convergence_loops.copy()
+        self.stop_separation_arxiv = [stop_separation[0]] * self.nlayers if len(stop_separation)==1 else stop_separation.copy()
+        self.bb_init_arxiv = [bb_init[0]] * self.nlayers if len(bb_init)==1 else bb_init.copy()
+        self.bb_step_arxiv = [bb_step[0]] * self.nlayers if len(bb_step)==1 else bb_step.copy()
         
         ### State Parameters
         # Codevectors        
-        self.mu = []
-        self.mulabels = []
+        self.x = []
+        self.y = []
+        self.labels = []
+        self.K = 0
+        self.classes = []
 
         self.parameters = []
         self.model = []
         self.optimizer = []
         
-        self.py = []
-        self.sxpy= []
-        self.slpy= []
-        self.old_mu = []
-        self.K = len(self.mu)
-        
-        # self.classes = list(np.unique(train_labels))
-        # # Create one codevector for each class known
-        # for c in self.classes:
-        #     cdata = [train_data[idx][self.resolution] for idx in range(len(train_data)) if np.all(train_labels[idx]==c)]
-        idx = np.random.choice(range(len(train_data)))
-        y_init = train_data[idx][self.resolution]
-        c_init = train_labels[idx]
-        self.insert_codevector(y_init, c_init)
-        self.classes = [c_init]
+        self.px = []
+        self.sx= []
+        self.last_x = []
 
         # Termination
-        self.Kmax = Kmax[self.resolution] 
-        self.Tmax = Tmax[self.resolution]
-        self.Tmin = Tmin[self.resolution]
-        self.gamma_schedule = gamma_schedule[self.resolution]
-        self.gamma_steady = gamma_steady[self.resolution]
+        self.Kmax = Kmax[self.mylayer] 
+        self.Tmax = Tmax[self.mylayer]
+        self.Tmin = Tmin[self.mylayer]
+        self.gamma_schedule = gamma_schedule[self.mylayer]
+        self.gamma_steady = gamma_steady[self.mylayer]
         if len(self.gamma_schedule)>0:
             self.gamma = self.gamma_schedule[0] 
         else:
@@ -308,48 +316,47 @@ class ODA:
         self.error_threshold_reached = 0
         self.timeline_limit = timeline_limit
         
-        # Bregman Divergence 
-        self.Bregman_phi = Bregman_phi[self.resolution] # 'phi_Eucl', 'phi_KL', 'phi_IS'
-        
-        # Regularization
-        self.py_cut = py_cut[self.resolution]
-        self.lvq = lvq[self.resolution]
-        self.e_p = _BregmanD(np.array(y_init),np.array(y_init+perturb_param[self.resolution]),self.Bregman_phi)            
-        self.e_n = _BregmanD(np.array(y_init),np.array(y_init+effective_neighborhood[self.resolution]),self.Bregman_phi)            
-        
-        # Convergence parameters
-        self.e_c = _BregmanD(np.array(y_init),np.array(y_init+em_convergence[self.resolution]),self.Bregman_phi)            
-        self.convergence_loops = convergence_loops[self.resolution]
-        self.error_threshold = error_threshold[self.resolution]
-        self.error_threshold_count = error_threshold_count[self.resolution]
-        self.convergence_counter_threshold = convergence_counter_threshold[self.resolution]
-        self.bb_init= bb_init[self.resolution] # initial stepsize of stochastic approximation: 1/(bb+1)
-        self.bb_step = bb_step[self.resolution] # bb+=bb_step
-        self.separate = True
-        self.stop_separation = stop_separation[self.resolution]
-        self.bb = self.bb_init
-        self.sa_steps = 0
-
-        # Keep record for each temperature level
+        # Save copy for each temperature level
         self.myK = [self.K]
         self.myT = [self.T]
-        self.myY = [self.mu.copy()]
-        self.myYlabels = [self.mulabels.copy()]
-        self.myYext = [copy.deepcopy(self.parameters)]
+        self.myX = [self.x.copy()]
+        self.myY = [self.y.copy()]
+        self.myLabels = [self.labels.copy()]
+        self.myParameters = [copy.deepcopy(self.parameters)]
         self.myModel = [copy.deepcopy(self.model)]
         self.myOptimizer = [copy.deepcopy(self.optimizer)]
-        self.myTrainError = [1]
-        self.myTestError = [1]
+        self.myTrainError = [[1,1,1]]
+        self.myTestError = [[1,1,1]]
         self.myLoops = [0]    
         self.myTime = [time.perf_counter()]
         self.myTreeK = [self.K]
         self.myTreeLoops = [0]
+
+        # Bregman Divergence 
+        self.Bregman_phi = Bregman_phi[self.mylayer] # 'phi_Eucl', 'phi_KL', 'phi_IS'
         
+        # Regularization
+        self.px_cut = px_cut[self.mylayer]
+        self.lvq = lvq[self.mylayer]
+        
+        # Convergence parameters
+        self.convergence_loops = convergence_loops[self.mylayer]
+        self.error_type = error_type[self.mylayer]
+        self.error_threshold = error_threshold[self.mylayer]
+        self.error_threshold_count = error_threshold_count[self.mylayer]
+        self.convergence_counter_threshold = convergence_counter_threshold[self.mylayer]
+        self.bb_init= bb_init[self.mylayer] # initial stepsize of stochastic approximation: 1/(bb+1)
+        self.bb_step = bb_step[self.mylayer] # bb+=bb_step
+        self.separate = True
+        self.stop_separation = stop_separation[self.mylayer]
+        self.bb = self.bb_init
+        self.sa_steps = 0
+
         # Counters
         self.last_sample = 0 # sample at which last convergence occured
         self.current_sample = 0
         self.self_regulate_counter = 0
-        self.self_regulate_threshold = 5
+        self.self_regulate_threshold = REGULATE_THRESHOLD
         
         # Timestamps
         self.tik = time.perf_counter()
@@ -357,10 +364,51 @@ class ODA:
     
         # Other
         self.plt_counter = 0 # for plots
-        self.low_p_warnings = 0 # for warnings regarding probability estimates
-        self.practical_zero = 1e-9 # for the log inside KL divergence
+        self.low_p_warnings = 0 # for warnings regarding probability estimates: Unused??
+        self.practical_zero = PRACTICAL_ZERO # for the log inside KL divergence
         self.jit = jit
+
+        # Data=dependent Initialization
+        if train_data_x:
+
+            idx = np.random.choice(range(len(train_data_x)))
+            self.initialize_node(train_data_x[idx], train_data_y[idx], train_labels[idx])
+            
+
+    def initialize_node(self, datum_x, datum_y, datum_label):
+        
+        self.resolutions = len(datum_x)
+        
+        x_init = datum_x[self.layers[self.mylayer]]
+        y_init = datum_y
+        c_init = datum_label
+
+        self.classes = [int(c_init)]
+        self.insert_codevector(x_init, y_init, c_init)
+        
+        perturb_param = self.perturb_param_arxiv
+        effective_neighborhood = self.effective_neighborhood_arxiv
+        em_convergence = self.em_convergence_arxiv
+        self.e_p = _BregmanD(np.array(x_init),np.array(x_init+perturb_param[self.mylayer]),self.Bregman_phi)            
+        self.e_n = _BregmanD(np.array(x_init),np.array(x_init+effective_neighborhood[self.mylayer]),self.Bregman_phi)            
+        self.e_c = _BregmanD(np.array(x_init),np.array(x_init+em_convergence[self.mylayer]),self.Bregman_phi)            
     
+        self.myK = [self.K]
+        self.myT = [self.T]
+        self.myX = [self.x.copy()]
+        self.myY = [self.y.copy()]
+        self.myLabels = [self.labels.copy()]
+        self.myParameters = [copy.deepcopy(self.parameters)]
+        self.myModel = [copy.deepcopy(self.model)]
+        self.myOptimizer = [copy.deepcopy(self.optimizer)]
+        self.myTrainError = [[1,1,1]]
+        self.myTestError = [[1,1,1]]
+        self.myLoops = [0]    
+        self.myTime = [time.perf_counter()]
+        self.myTreeK = [self.K]
+        self.myTreeLoops = [0]
+
+        # print(f"*** Node Initalized x:{x_init}, y:{y_init}, c:{c_init} ***")
     
     
     ###########################################################################
@@ -370,330 +418,361 @@ class ODA:
     
     # Fit ODA to a Dataset (Until Stopping Criteria Reached)
     ###########################################################################
-    def fit(self,train_data=[],train_labels=[],test_data=[],test_labels=[]):
+    def fit(self, train_data_x=[], train_data_y=[], train_labels=[],
+            test_data_x=[], test_data_y=[], test_labels=[]):
+
+        len_data_x = len(train_data_x)
+
+        if len_data_x==0: 
+            print("Please provide data samples for training.")
+            return 
         
-        if len(train_data)==0 and len(self.train_data_arxiv)>0:
-            train_data = self.train_data_arxiv.copy()
-            train_labels = self.train_labels_arxiv.copy()
         fit_sample = 0
-        datalen = len(train_data)
         
         self.myTime[-1] = time.perf_counter()
         
         ## Whlie the entire tree is not trained
         while not self.trained: 
             
-            idx = fit_sample % datalen
-            datum = train_data[idx].copy()
-            datum_label = train_labels[idx]
+            idx = fit_sample % len_data_x
+            datum_x = train_data_x[idx]
+            datum_y = train_data_y[idx] 
+            datum_label = train_labels[idx] 
             
             ## Train this or children. train_step() is recursive.
-            self.train_step(datum, datum_label, 
-                            train_data=train_data, train_labels=train_labels, 
-                            test_data=test_data, test_labels=test_labels)
-    
+            self.train_step(datum_x, datum_y, datum_label,
+                            train_data_x=train_data_x, train_data_y=train_data_y, train_labels=train_labels, 
+                            test_data_x=test_data_x, test_data_y=test_data_y, test_labels=test_labels)
+
             fit_sample += 1
     
     
-    # Train ODA given a set of data (Use Only Once) 
+    # Train ODA given a set of data (data used only once) 
     # May Terminate Before Stopping Criteria Reached
     # Can be used for Online Training (One Data Point per Call)
     ###########################################################################
-    def train(self,train_data,train_labels,test_data=[],test_labels=[]):
+    def train(self, train_data_x=[], train_data_y=[], train_labels=[],
+            test_data_x=[], test_data_y=[], test_labels=[]):
+        
+        len_data_x = len(train_data_x)
+
+        if len_data_x==0: 
+            print("Please provide data samples for training.")
+            return 
         
         self.myTime[-1]  = time.perf_counter()
         
         ## Whlie the entire tree is not trained
-        for idx in range(len(train_data)): 
-            
-            datum = train_data[idx].copy()
-            datum_label = train_labels[idx]
+        for datum_x, datum_y, datum_label in zip(train_data_x, train_data_y, train_labels): 
             
             ## Train this or children. train_step() is recursive.
-            self.train_step(datum, datum_label, 
-                            train_data=self.train_data_arxiv, train_labels=self.train_labels_arxiv, 
-                            test_data=test_data, test_labels=test_labels)
-    
+            self.train_step(datum_x, datum_y, datum_label,
+                            train_data_x=train_data_x, train_data_y=train_data_y, train_labels=train_labels, 
+                            test_data_x=test_data_x, test_data_y=test_data_y, test_labels=test_labels)
+
     # Training Step
     ###########################################################################
-    def train_step(self, datum, datum_label=0, 
-                   train_data=[],train_labels=[], test_data=[],test_labels=[]):
-        
-        ## For Debugging
-        stop_timeline,len_timeline = self.check_timeline_limit()
+    def train_step(self, datum_x, datum_y, datum_label=0,
+               train_data_x=[], train_data_y=[], train_labels=[], 
+               test_data_x=[], test_data_y=[], test_labels=[]):
+
+        # Debugging Check
+        stop_timeline, len_timeline = self.check_timeline_limit()
         if stop_timeline:
-            self.trained=True
-            
-        if not self.trained:
-            
-            if len(self.children)>0:
-                ## check if all children trained
-                self.check_trained()
-                
-                if not self.trained:
-                    
-                    ## find the winner child
-                    j,_ = self.winner(np.array(self.mu), np.array(datum[self.resolution]))
-                    
-                    ## Recursively call train_step(). Each child will use its own resolution of the data.
-                    self.children[j].train_step(datum,datum_label,
-                                                train_data,train_labels, 
-                                                test_data,test_labels)
-                else:
-                    ## if just trained, report time
-                    self.tok = time.perf_counter()
-                    self.myTime.append(self.tok)
-            
-            else: ## Otherwise, train this cell
-                    
-                ## Insert class if not known so far
-                if (not self.regression) and (datum_label not in self.classes):
-                    self.classes.append(datum_label)
-                    self.insert_codevector(datum[self.resolution], datum_label)
-                
-                self.current_sample += 1
-                ## insert perturbations and initialize SA stepsizes
-                if not self.perturbed:
-                    if self.lvq<2:
-                        self.perturb()
-                    else: ## set it true without perturbing
-                        self.perturbed = True
-                    self.converged = False     
-                    self.bb = self.bb_init
-                    self.sa_steps = 0
-                
-                ## Stochastic Approximation Step
-                self.sa_step(datum, datum_label)
-                                
-                ## Check Convergence
-                self.check_convergence()
-                
-                if self.converged:
-                    self.tok = time.perf_counter()
-                    
-                    ## Find effective codevectors
-                    if self.lvq<2:
-                        self.find_effective_clusters() 
-                    if self.lvq<2 and not self.regression:
-                        self.pop_idle_clusters() 
-                    self.prune_siblings()  
-                    
-                    ## If Kmax reached, keep the last set of codevectors
-                    stop_K = self.K>self.Kmax
-                    if stop_K:
-                        
-                        self.overwrite_codevectors(self.myY[-1].copy(), self.myYlabels[-1].copy(),copy.deepcopy(self.myYext[-1]))
-                        self.T = self.myT[-1]
-                        
-                        # self.current_sample = self.myLoops[-1]
-                        if self.lvq == 1:
-                            # self.find_effective_clusters() 
-                            # self.pop_idle_clusters() 
-                            self.lvq = 2
-                            print(f'--- Keeping K={self.K} codevectors.')
-                    
-                    self.myT.append(self.T)
-                    self.myK.append(self.K) 
-                    self.myY.append(self.mu.copy())
-                    self.myYlabels.append(self.mulabels.copy())
-                    self.myYext.append(copy.deepcopy(self.parameters))
-                    self.myModel.append(copy.deepcopy(self.model))
-                    self.myOptimizer.append(copy.deepcopy(self.optimizer))
-                    self.myLoops.append(self.current_sample)
-                    self.myTime.append(self.tok)
-                    self.put_in_timeline(self.id.copy())
-                    
-                    ## Check criteria to stop training self and split, if possible
-                    stop_T = self.myT[-1]<=self.Tmin
-                    stop_timeline,len_timeline = self.check_timeline_limit()
-                    # Keep score
-                    stop_error=False
-                    # Compute score to be used as stopping criterion
-                    if self.keepscore >1:
-                        d_train = self.score(train_data,train_labels)
-                        self.myTrainError.append(d_train)
-                        if d_train<self.error_threshold:
-                            self.confirm_error_threshold()
-                        self.error_threshold_reached = self.check_error_threshold()
-                        stop_error = self.error_threshold_reached>self.error_threshold_count
-                        if len(test_data)>0:
-                            d_test = self.score(test_data,test_labels)
-                            self.myTestError.append(d_test)
-                    
-                    # Show score
-                    if self.keepscore>2:
-                        
-                        tK = self.treeK()
-                        tL = self.treeLoops()
-                        print(f'{len_timeline} -- ID: {self.id}: '+ 
-                              f'Samples: {tL}(+{self.current_sample-self.last_sample}): ' +
-                              f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, t = {self.myTime[-1]-self.myTime[0]:.1f} [+{self.myTime[-1]-self.myTime[-2]:.1f}s]')
-                        if not stop_K:
-                            print(f'Train Error: {d_train:.4f}')
-                            if len(test_data)>0:
-                                print(f'Test Error: {d_test:.4f}')
-                            if d_train<self.error_threshold:
-                                print('*** Training Error threshold reached. ***')
-                            
-                    
-                    ## if reached minimum temperature or desired score or maximum tree nodes
-                    if (stop_K and self.lvq==0) or stop_T or stop_error or stop_timeline:
-                        
-                        ## Print State
-                        if self.keepscore==1:
-                            tK = self.treeK()
-                            tL = self.treeLoops()
-                            print(f'{len_timeline} -- ID: {self.id}: '+
-                                    f'Samples: {tL}(+{self.current_sample-self.last_sample}): ' +
-                                    f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, t = {self.myTime[-1]-self.myTime[0]:.1f} [+{self.myTime[-1]-self.myTime[-2]:.1f}s]')
-                            
-                            d_train = self.score(train_data,train_labels)
-                            self.myTrainError.append(d_train)
-                            print(f'Train Error: {d_train:.3f}')
-                            if len(test_data)>0:
-                                d_test = self.score(test_data,test_labels)
-                                self.myTestError.append(d_test)
-                                print(f'Test Error: {d_test:.3f}')
-                        
-                        if stop_K and self.lvq==0:
-                            print('--- Maximum number of codevectors reached. ')
-                        if stop_T:
-                            print('--- Minimum temperature reached. ---')
-                        if stop_error:
-                            print('--- Minimum error reached. ---')
-                        if stop_timeline:
-                            print('--- Maximum number of nodes reached. ---')
-                        
-                        self.check_untrained_siblings()
-                        
-                        ## split (if possible)
-                        if self.resolution+1<self.depth and len(self.myY[-1])>1: 
-                            self.split(datum,datum_label)
-                            self.reset_error_threshold()
-                            if self.keepscore>0:
-                                print(f'ID: {self.id}: Trained. Splitting..')
-                        ## or declare trained
-                        else:
-                            self.trained = True
-                            # if len(self.myY)>1:
-                            if self.keepscore>0:
-                                print(f'ID: {self.id}: Trained')
-                            # self.tok = time.perf_counter()
-                            # self.myTime.append(self.tok-self.tik)
-                    
-                    self.last_sample = self.current_sample
-    
-                    self.update_T()
-                    self.perturbed=False
-                    
-                    # self.tik = time.perf_counter()
+            self.trained = True
+
+        if self.trained:
+            return  # Exit if already trained
         
+        if self.children:
+            # Check if children are trained
+            self.check_trained()
+            if not self.trained:
+
+                #TODO: When children are not initialized yet?
+
+                # Find the winning child
+                j, _ = self.winner(self.x, datum_x[self.layers[self.mylayer]])
+
+                # Recursive call to the winner child
+                self.children[j].train_step(datum_x, datum_y, datum_label,
+                                            train_data_x, train_data_y, train_labels,
+                                            test_data_x, test_data_y, test_labels)
+            else:
+                # If just trained, report time 
+                self.tok = time.perf_counter()
+                self.myTime.append(self.tok)
+            
+            return 
+
+        ### Train this cell (leaf node)
+
+        # Insert Codevector if new class is observed
+        # Also initializes codevector if not initialized
+        if datum_label not in self.classes:
+            if self.K>0: # just add new class
+                self.classes.append(datum_label)
+                self.insert_codevector(datum_x[self.layers[self.mylayer]], datum_y, datum_label)
+            else: # initialize codevector
+                self.initialize_node(datum_x, datum_y, datum_label)
+
+        self.current_sample += 1
+
+        # Perturbation and SA Initialization (only if not perturbed)
+        if not self.perturbed:
+            if self.lvq < 2:
+                self.perturb()
+            else:
+                self.perturbed = True  # No perturbation for lvq >= 2
+            self.converged = False
+            self.bb = self.bb_init
+            self.sa_steps = 0
+
+        # Stochastic Approximation Step
+        self.sa_step(datum_x, datum_y, datum_label)
+
+        # Convergence Check
+        self.check_convergence()
+        if not self.converged:
+            return 
+        
+        ### SA has converged 
+
+        # Report time
+        self.tok = time.perf_counter()  
+
+        # Find effective codevectors
+        if self.lvq < 2:
+            self.find_effective_clusters()
+        if self.lvq < 2:
+            self.pop_idle_clusters()
+        self.prune_siblings()
+
+        # If Kmax reached, keep the last set of codevectors
+        stop_K = self.K > self.Kmax
+        if stop_K:
+            self.overwrite_codevectors(
+                self.myX[-1],
+                self.myY[-1],
+                self.myLabels[-1],
+                self.myParameters[-1])  
+            self.T = self.myT[-1]
+            
+            # self.current_sample = self.myLoops[-1]
+            if self.lvq == 1:
+                # self.find_effective_clusters() 
+                # self.pop_idle_clusters() 
+                self.lvq = 2
+                print(f'--- Keeping K={self.K} codevectors.')
+                
+        # Data logging - consolidated into a single block
+        self.myT.append(self.T)
+        self.myK.append(self.K)
+        self.myX.append(self.x.copy())
+        self.myY.append(self.y.copy())
+        self.myLabels.append(self.labels.copy())
+        self.myParameters.append(copy.deepcopy(self.parameters))
+        self.myModel.append(copy.deepcopy(self.model))
+        self.myOptimizer.append(copy.deepcopy(self.optimizer))
+        self.myLoops.append(self.current_sample)
+        self.myTime.append(self.tok)
+        self.put_in_timeline(self.id.copy())
+
+        # Check criteria to stop training self and split, if possible
+        stop_T = self.myT[-1] <= self.Tmin
+        stop_timeline, len_timeline = self.check_timeline_limit()
+        stop_error = False
+
+        # Compute score (if data are given)
+        if train_data_x:
+            # d_train = [d_train_x, d_train_y, dtrain_c]
+            d_train = self.score(train_data_x, train_data_y, train_labels)
+            self.myTrainError.append(d_train)
+            if d_train[self.error_type] < self.error_threshold:
+                self.confirm_error_threshold()
+            self.error_threshold_reached = self.check_error_threshold()
+            stop_error = self.error_threshold_reached > self.error_threshold_count
+        if test_data_x:  
+            # d_test = [d_test_x, d_test_y, dtest_c]
+            d_test = self.score(test_data_x, test_data_y, test_labels)
+            self.myTestError.append(d_test)
+
+        # Verbose output after every SA convergence (if keepscore == 2)
+        if self.verbose == 2:
+            tK = self.treeK()
+            tL = self.treeLoops()
+            print(
+                f'{len_timeline} -- ID: {self.id}: '
+                f'Samples: {tL}(+{self.current_sample - self.last_sample}): '
+                f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, '
+                f't = {self.myTime[-1] - self.myTime[0]:.1f} '
+                f'[+{self.myTime[-1] - self.myTime[-2]:.1f}s]'
+                )
+            if train_data_x and not stop_K:
+                print(f'Train Error: [{d_train[0]:.4f}, {d_train[1]:.4f}, {d_train[2]:.4f}]')
+                if d_train[self.error_type] < self.error_threshold:
+                    print(f'*** Training Error threshold reached ({self.error_threshold_reached}/{self.error_threshold_count}). ***')
+                if test_data_x:
+                    print(f'Test Error: [{d_test[0]:.4f}, {d_test[1]:.4f}, {d_test[2]:.4f}]')
+
+        # if termination/splitting reached minimum temperature or desired score or maximum tree nodes
+        if (stop_K and self.lvq == 0) or stop_T or stop_error or stop_timeline:
+            
+            # Verbose output (if keepscore == 1)
+            if self.verbose == 1:
+                print(
+                    f'{len_timeline} -- ID: {self.id}: '
+                    f'Samples: {tL}(+{self.current_sample - self.last_sample}): '
+                    f'T = {self.myT[-1]:.4f}, K = {self.myK[-1]}, treeK = {tK}, '
+                    f't = {self.myTime[-1] - self.myTime[0]:.1f} '
+                    f'[+{self.myTime[-1] - self.myTime[-2]:.1f}s]'
+                    )
+                if train_data_x and not stop_K:
+                    print(f'Train Error: [{d_train[0]:.4f}, {d_train[1]:.4f}, {d_train[2]:.4f}]')
+                    if d_train[self.error_type] < self.error_threshold:
+                        print(f'*** Training Error threshold reached ({self.error_threshold_reached}/{self.error_threshold_count}). ***')
+                    if test_data_x:
+                        print(f'Test Error: [{d_test[0]:.4f}, {d_test[1]:.4f}, {d_test[2]:.4f}]')
+            
+            # Termination reason output
+            if stop_K and self.lvq == 0:
+                print('--- Maximum number of codevectors reached. ')
+            if stop_T:
+                print('--- Minimum temperature reached. ---')
+            if stop_error:
+                print('--- Minimum error reached. ---')
+            if stop_timeline:
+                print('--- Maximum number of nodes reached. ---')
+            
+            self.check_untrained_siblings()
+            
+            # Splitting or declaring trained
+            if self.mylayer + 1 < self.nlayers and len(self.myX[-1]) > 1:
+                self.split()
+                self.reset_error_threshold()
+                if self.verbose > 0:
+                    print(f'ID: {self.id}: Trained. Splitting..')
+            else:
+                self.trained = True
+                if self.verbose > 0:
+                    print(f'ID: {self.id}: Trained')
+
+        self.last_sample = self.current_sample
+        self.update_T()
+        self.perturbed = False
+
+                
     # Stochastic Approximation Step
     ###########################################################################
-    def sa_step(self, datum, datum_label):
+    def sa_step(self, datum_x, datum_y, datum_label):
+
+        # print(f'sx:{sx}')
+        # print(f'self.sx:{self.sx}')
+
+        # Prepare for update
+        self.last_x = self.x.copy()
+        self.low_p_warnings = 0 # unused?
+        datum_x = datum_x[self.layers[self.mylayer]]
+
+        x = np.array(self.x, dtype=DTYPE)
+        y = np.array(self.y, dtype=DTYPE)
+        labels = np.array(self.labels, dtype=int)
+        px = np.array(self.px, dtype=DTYPE)
+        sx = np.array(self.sx, dtype=DTYPE)
         
-        self.old_mu = self.mu.copy()
-        self.low_p_warnings = 0
-        datum = datum[self.resolution]
-        
-        if self.lvq < 3:
-            
-            for i in range(self.K): ## for all centroids
-                
-                if self.jit:
+        datum_x = np.array(datum_x, dtype=DTYPE)
+        datum_y = np.array(datum_y, dtype=DTYPE)
+        datum_label = int(datum_label)
 
-                    self.py[i], self.sxpy[i], self.mu[i], self.slpy[i], self.mulabels[i] = _sa_update(i, 
-                        np.array(self.mu), np.array(self.mulabels), 
-                        np.array(self.py), np.array(self.sxpy), np.array(self.slpy), 
-                        np.array(datum), np.array(datum_label), self.regression, 
-                        self.separate, self.T, 
-                        self.bb, phi=self.Bregman_phi)
+        # Prepare Combined codevector
+        mu = np.array([np.concatenate(z) for z in list(zip(x,y))], dtype=DTYPE)
+        datum = np.concatenate((datum_x,datum_y))
+        lenx = len(datum_x)
 
-                else:
-                    
-                    T_inv = (1-self.T)/self.T
-                    d = [self.BregmanD(datum,self.mu[k]) for k in range(len(self.mu))]
-                    py = self.py.copy()
-                    if self.separate and not self.regression:
-                        py = [self.py[i] if datum_label==self.mulabels[i] else 0 for i in range(len(self.py))]
-                    pyx_sum = np.dot(py,[np.exp(-dj*T_inv) for dj in d])
-                    if pyx_sum == 0: # e.g. if no codevectors of the same class as observation
-                        pyx = 0 # or break
-                    else:    
-                        pyx = py[i]*np.exp(-d[i]*T_inv)/pyx_sum
-                    # SA update
-                    self.py[i] = self.py[i] + 1/(self.bb+1)*(pyx - self.py[i])
-                    self.sxpy[i] = self.sxpy[i] + 1/(self.bb+1)*(pyx*datum - self.sxpy[i])
-                    self.mu[i] = self.sxpy[i]/self.py[i]  
-                    if self.regression:
-                        self.slpy[i] = self.slpy[i] + 1/(self.bb+1)*(pyx*datum_label - self.slpy[i])
-                        self.mulabels[i] = self.slpy[i]/self.py[i]
-                                        
-                # Warning sign
-                # if pyx!=pyx: # or pyx<1e-32:
-                #     self.low_p_warnings+=1
+        ### ODA update
+        if self.lvq < 3:  
 
-            # Warning
-            # if self.low_p_warnings == len(self.y):
-            #     # print(f'Number of Idle codevectors: {self.low_p_warnings}/{self.K}')
-            #     self.low_p_warnings = 0
-            #     print(f'WARNING: Conditional Probabilities too small.')
-            #     # +
-            #     #               f'You may need to consider scaling the input space,'+
-            #     #               f'or using different initial values.')
-            
-        else:
-                
             if self.jit:
                 
-                self.py[i], self.sxpy[i], self.mu[i], self.slpy[i], self.mulabels[i] = _lvq_update(i, 
-                    np.array(self.mu), np.array(self.mulabels), 
-                    np.array(self.py), np.array(self.sxpy), np.array(self.slpy), 
-                    np.array(datum), np.array(datum_label), self.regression,
-                    self.separate, self.T, 
-                    self.bb, phi=self.Bregman_phi)
-        
-            else:
+                px, sx, mu = _sa_update(
+                    mu, labels, px, sx,
+                    datum, datum_label, lenx, self.observe_xy,
+                    self.separate, self.T, self.bb, self.Bregman_phi)
                 
-                d = [self.BregmanD(datum,self.mu[k]) for k in range(len(self.mu))]
-                j = np.argmin(d)
-                s = 1 if (self.mulabels[j]==datum_label or self.regression) else -1
-                # LVQ Gradient Descent Update
-                self.mu[j] = self.mu[j] - 1/(self.bb+1) * s * self.dBregmanD(datum,self.mu[j])
-                self.mulabels[j] = self.mulabels[j] - 1/(self.bb+1) * s * self.dBregmanD(datum_label,self.mulabels[j])
+                self.px = [x for x in px]
+                self.sx = [x for x in sx]
+                self.x = [x[:lenx] for x in mu]
+                self.y = [x[lenx:] for x in mu]
                 
-        
-        self.bb += self.bb_step 
-        self.sa_steps += 1
-    
+            else:  # Python implementation
+
+                T_inv = (1 - self.T) / self.T
+                bb_step = 1 / (self.bb + 1)
+
+                for k in range(self.K):
+                    
+                    if self.separate:
+                        px_classification = [px[i] if datum_label==labels[i] else 0 
+                                                for i in range(px.shape[0])]
+                    else: 
+                        px_classification = px
+
+                    if self.observe_xy:
+                        d = [self.BregmanD(datum,m) for m in mu]
+                    else:
+                        d = [self.BregmanD(datum[:lenx],m[:lenx]) for m in mu]
+
+                    pxk_sum = np.dot(px_classification,[np.exp(-dj*T_inv) for dj in d])
+                    if pxk_sum == 0: # e.g. if no codevectors of the same class as observation
+                        pxkhat = 0 # or break
+                    else:    
+                        pxkhat = px_classification[k]*np.exp(-d[k]*T_inv)/pxk_sum
+                    
+                    # SA update
+                    px[k] = px[k] + bb_step *(pxkhat - px[k])
+                    sx[k] = sx[k] + bb_step *(pxkhat*datum - sx[k])
+                    mu[k] = sx[k]/px[k]
+
+                self.px = [x for x in px]
+                self.sx = [x for x in sx]
+                self.x = [xx[:lenx] for xx in mu]
+                self.y = [xx[lenx:] for xx in mu]
             
+            self.bb += self.bb_step
+            self.sa_steps += 1 
+            return
+
+        ### LVQ update
+
+        if self.jit:
             
-    # Load ODA Model
-    # TODO: Extend to go back in timeline 
-    ###########################################################################
-    def load(self, T=[]):
-        
-        self.perturbed = False
-        self.converged = False
-        self.trained = False
-        self.bb = self.bb_init
-        
-        if T!=[]:
-            self.T = T
-        
-        self.tik = time.perf_counter()
-        self.tok = time.perf_counter()            
-        
-        if len(self.children)>0:
-            for child in self.children:
-                child.load()
-        
+            mu = _lvq_update(mu, labels, datum, datum_label, lenx,
+                             self.bb, self.Bregman_phi)
             
+            self.x = [x[:lenx] for x in mu]
+            self.y = [x[lenx:] for x in mu]
+
+        else:
+            
+            bb_step = 1 / (self.bb + 1)
+
+            d = [self.BregmanD(datum[:lenx],m[:lenx]) for m in mu]
+            j = np.argmin(d)
+            s = 1 if (labels[j]==datum_label) else -1
+            # LVQ Gradient Descent Update
+            mu[j] = mu[j] - bb_step * s * self.dBregmanD(datum,mu[j])
+
+            self.x = [x[:lenx] for x in mu]
+            self.y = [x[lenx:] for x in mu]
+                
+        self.bb += self.bb_step
+        self.sa_steps += 1 
+
+        
             
     ###########################################################################
     ### Low-Level ODA Functions
     ###########################################################################
-    
     
     # Check Convergence
     ###########################################################################
@@ -711,7 +790,7 @@ class ODA:
                 self.convergence_counter += 1
         else:
             
-            conv_reached = np.all([self.BregmanD(np.array(self.old_mu[i]),np.array(self.mu[i])) < \
+            conv_reached = np.all([self.BregmanD(np.array(self.last_x[i]),np.array(self.x[i])) < \
                             self.Temp()*self.e_c * (1+self.bb_init)/(1+self.bb)
                                                             for i in range(self.K)])  
                 
@@ -729,8 +808,11 @@ class ODA:
     # Copy pytorch optimizer
     ###########################################################################            
     def copy_opt(self,optimizer1,model):
-        optimizer = type(optimizer1)(model.parameters(), lr=optimizer1.defaults['lr'])
-        optimizer.load_state_dict(optimizer1.state_dict())
+        try: 
+            optimizer = type(optimizer1)(model.parameters(), lr=optimizer1.defaults['lr'])
+            optimizer.load_state_dict(optimizer1.state_dict())
+        except:
+            optimizer=copy.deepcopy(optimizer1)
         return optimizer
     
     # Perturb Codevectors
@@ -739,21 +821,20 @@ class ODA:
         ## insert perturbations of all effective yi
         for i in reversed(range(self.K)):
             # new_yi = self.y[i] + self.perturb_param*2*(np.random.rand(len(self.y[i]))-0.5)
-            new_yi = self.mu[i] + self.Temp()*self.e_p * 2 * (np.random.rand(len(self.mu[i]))-0.5)
-            self.py[i] = self.py[i]/2.0
-            self.sxpy[i] = self.py[i]*self.mu[i]
-            self.slpy[i] = self.py[i]*self.mulabels[i]
-            self.mu.append(new_yi)
-            self.mulabels.append(self.mulabels[i]) 
-            self.parameters.append(copy.deepcopy(self.parameters[i])) 
+            new_xi = self.x[i] + self.Temp()*self.e_p * 2 * (np.random.rand(len(self.x[i]))-0.5)
+            new_yi = self.y[i] + self.Temp()*self.e_p * 2 * (np.random.rand(len(self.y[i]))-0.5)
+            self.px[i] = self.px[i]/2.0
+            self.sx[i] = self.px[i]*np.concatenate((self.x[i],self.y[i]))
             
+            self.x.append(new_xi)
+            self.y.append(new_yi)
+            self.px.append(self.px[i])
+            self.sx.append(self.px[i]*np.concatenate((new_xi,new_yi)))
+            self.labels.append(self.labels[i]) 
+            self.parameters.append(copy.deepcopy(self.parameters[i])) 
             self.model.append(copy.deepcopy(self.model[i])) 
             self.optimizer.append( self.copy_opt(self.optimizer[i],self.model[-1]) ) 
-            
-            self.py.append(self.py[i])
-            self.sxpy.append(self.py[i]*new_yi)
-            self.slpy.append(self.py[i]*self.mulabels[i])
-        self.K = len(self.mu)
+        self.K = len(self.x)
         self.perturbed = True
     
     
@@ -782,109 +863,114 @@ class ODA:
         while i<self.K:
             for j in reversed(np.arange(i+1,self.K)):
                 
-                if not self.regression:
-                    merged = self.BregmanD(np.array(self.mu[i]),np.array(self.mu[j]))< \
-                            self.Temp()*self.e_n and self.mulabels[i]==self.mulabels[j]
-                else:
-                    merged = self.BregmanD(np.array(self.mu[i]),np.array(self.mu[j]))< \
-                            self.Temp()*self.e_n 
+                merged = self.BregmanD(np.array(self.x[i]),np.array(self.x[j]))< \
+                            self.Temp()*self.e_n and self.labels[i]==self.labels[j]
                             
                 if merged:
                     
-                    self.py[i] = self.py[i]+self.py[j]
-                    self.sxpy[i] = self.mu[i]*self.py[i]
-                    self.slpy[i] = self.mulabels[i]*self.py[i]
-                    self.mu.pop(j)
-                    self.mulabels.pop(j)
+                    self.px[i] = self.px[i]+self.px[j]
+                    self.sx[i] = self.x[i]*self.px[i]
+                    self.px.pop(j)
+                    self.sx.pop(j)
+                    self.x.pop(j)
+                    self.y.pop(j)
+                    self.labels.pop(j)
                     self.parameters.pop(j)
                     self.model.pop(j)
                     self.optimizer.pop(j)
-                    self.py.pop(j)
-                    self.sxpy.pop(j)
-                    self.slpy.pop(j)
                     self.K-=1
             
             i+=1
     
-    
+
     # Insert Codevector
     ###########################################################################
-    def insert_codevector(self,datum,datum_label,datum_py=[],datum_ext=[],
-                          model_ext=[],optimizer_ext=[],norm=False): 
-        self.mu.append(datum.copy())
-        self.mulabels.append(datum_label)
-        self.parameters.append(copy.deepcopy(datum_ext))
-        self.model.append(model_ext)
-        self.optimizer.append(optimizer_ext)
-        if datum_py==[]:
-            self.py.append(1.0)
-        else:
-            self.py.append(datum_py)
-        self.sxpy.append(self.mu[-1]*self.py[-1])    
-        self.slpy.append(self.mulabels[-1]*self.py[-1])    
-        self.K = len(self.mu)
+    def insert_codevector(self, x, y, label, px=1.0, parameters=None,
+                          model=None, optimizer=None, norm=False): 
+        
+        x = x.astype(DTYPE)
+        y = y.astype(DTYPE)
+        label = int(label)
+        px = np.float32(px)
+        sx = np.array(np.concatenate((x,y))*px, dtype=DTYPE)
 
+        self.x.append(x)
+        self.y.append(y)
+        self.labels.append(label)
+        self.px.append(px)
+        self.sx.append(sx)    
+        self.K = len(self.x)
+
+        if parameters is not None:
+            self.parameters.append(copy.deepcopy(parameters))
+        else:
+            self.parameters.append([])
+        self.model.append(model)
+        self.optimizer.append(optimizer)
+
+        # TODO: ensure dtypes here
         if norm:
+            self.px = [float(p)/sum(self.px) for p in self.px]
             self.py = [float(p)/sum(self.py) for p in self.py]
-            self.sxpy= [self.mu[i]*self.py[i] for i in range(len(self.mu))]    
-            self.slpy= [self.mulabels[i]*self.py[i] for i in range(len(self.mulabels))]    
+            self.sx= [self.x[i]*self.px[i] for i in range(len(self.x))]    
 
     # Remove Codevector
     ###########################################################################
     def pop_codevector(self,idx,norm=False): 
-        self.mu.pop(idx)
-        self.mulabels.pop(idx)
+        self.x.pop(idx)
+        self.y.pop(idx)
+        self.labels.pop(idx)
         self.parameters.pop(idx)
         self.model.pop(idx)
         self.optimizer.pop(idx)
-        self.py.pop(idx)
-        self.sxpy.pop(idx)
-        self.slpy.pop(idx)
-        self.K = len(self.mu)
+        self.px.pop(idx)
+        self.sx.pop(idx)
+        self.K = len(self.x)
 
+        # TODO: ensure dtypes here
         if norm:
-            self.py = [float(p)/sum(self.py) for p in self.py]
-            self.sxpy= [self.mu[i]*self.py[i] for i in range(len(self.mu))]   
-            self.slpy= [self.mulabels[i]*self.py[i] for i in range(len(self.mulabels))]   
-        
+            self.px = [float(p)/sum(self.px) for p in self.px]
+            self.sx= [np.concatenate((self.x[i],self.y[i]))*self.px[i] for i in range(len(self.x))]   
         
     # Discard Idle Codevectors
     ###########################################################################
     def pop_idle_clusters(self):
         i = 0
-        py_cut = self.py_cut
-        while i < len(self.mu):
+        px_cut = self.px_cut
+        while i < len(self.x):
             ## if the only representatitve of its class make it harder to be pruned
             # yli = self.ylabels.copy()
             # yli.pop(i)
             # if len(yli)>0 and np.any(np.array(self.ylabels[i])==np.array(yli)):
             #     py_cut = self.py_cut**2
             # prune idle codevector
-            if self.py[i]<py_cut:
+            if self.px[i]<px_cut:
                 self.pop_codevector(i)
-                if self.keepscore>2:
+                if self.verbose==2:
                     print('*** Idle Codevector Pruned (pop_idle_clusters) ***')
             else:
                 i+=1
     
     # Overwrite Existing Codevectors (for External Use)
     ###########################################################################
-    def overwrite_codevectors(self,new_y,new_ylabels,new_ext=[],new_model=[],new_optimizer=[],new_py=[]): # new_y must be a list
-        self.mu = new_y.copy()
-        self.mulabels = new_ylabels.copy()
-        if new_ext!=[]:
-            self.parameters = copy.deepcopy(new_ext)
+    # TODO: check dtypes
+    def overwrite_codevectors(self,new_x,new_y,new_labels,new_parameters=[],
+                              new_model=[],new_optimizer=[],new_px=[]): # new_y must be a list
+        self.x = new_x.copy()
+        self.y = new_y.copy()
+        self.labels = new_labels.copy()
+        if new_parameters!=[]:
+            self.parameters = copy.deepcopy(new_parameters)
         if new_model!=[]:
             self.model = new_model
         if new_optimizer!=[]:
             self.optimizer = new_optimizer
-        if new_py==[]:
-            self.py = [1.0 / len(self.mu) for i in range(len(self.mu))] 
+        if new_px==[]:
+            self.px = [1.0 / len(self.x) for i in range(len(self.x))] 
         else:
-            self.py = new_py.copy()
-        self.sxpy= [self.mu[i]*self.py[i] for i in range(len(self.mu))]    
-        self.slpy= [self.mulabels[i]*self.py[i] for i in range(len(self.mulabels))]    
-        self.K = len(self.mu)
+            self.px = new_px.copy()
+        self.sx= [np.concatenate((self.x[i],self.y[i]))*self.px[i] for i in range(len(self.x))]    
+        self.K = len(self.x)
     
     ###########################################################################
     ### Tree-Structure Functions
@@ -893,23 +979,22 @@ class ODA:
     
     # Split Cell: Create Children ODA nodes
     ###########################################################################
-    def split(self,datum,datum_label):
+    def split(self):
         
-        for i in range(len(self.myY[-1])):
+        for i in range(len(self.myX[-1])):
 
-            parent_y = self.myY[-1][i].copy()
-            parent_ylabel = self.myYlabels[-1][i]
+            
             self.children.append(ODA(
                 # Data
-                # train_data=[datum], 
-                # train_labels=[datum_label], 
-                train_data=[[parent_y]*self.depth], 
-                train_labels=[parent_ylabel], 
+                # No data given. Child will be initialized with the first sample.
+                # Layers
+                layers = self.layers,
                 # Bregman divergence
                 Bregman_phi=self.Bregman_phi_arxiv, 
                 # Termination
                 Kmax=self.Kmax_arxiv,
                 timeline_limit = self.timeline_limit,
+                error_type=self.error_type_arxiv,
                 error_threshold=self.error_threshold_arxiv,
                 error_threshold_count=self.error_threshold_count_arxiv,
                 # Temperature
@@ -922,8 +1007,7 @@ class ODA:
                 parent=self,
                 # Regularization
                 lvq=self.lvq_arxiv, 
-                regression=self.regression,
-                py_cut=self.py_cut_arxiv,
+                px_cut=self.py_cut_arxiv,
                 perturb_param=self.perturb_param_arxiv, 
                 effective_neighborhood=self.effective_neighborhood_arxiv, 
                 # Convergence
@@ -934,14 +1018,13 @@ class ODA:
                 bb_init=self.bb_init_arxiv,
                 bb_step=self.bb_step_arxiv,
                 # Verbose
-                keepscore=self.keepscore,
+                verbose=self.verbose,
                 jit = self.jit)
                 )
             
-            self.children[-1].yext=[copy.deepcopy(self.parameters[i])]
+            self.children[-1].parameters=[copy.deepcopy(self.parameters[i])]
             self.children[-1].model=[copy.deepcopy(self.model[i])]
             self.children[-1].optimizer=[self.copy_opt(self.optimizer[i],self.children[-1].model[-1])]
-            self.children[-1].input_len = self.input_len
     
     # Calculate Nodes of the Tree
     ###########################################################################
@@ -1018,23 +1101,23 @@ class ODA:
             self.self_regulate_counter = 0
             
             # Compress Redundant Codevectors (Classification Only)        
-            if self.parent:
-                if (not self.regression) and len(np.unique(self.parent.myYlabels[-1]))>1:
-                    if len(np.unique(self.mulabels))==1:
-                        self.overwrite_codevectors([self.mu[0]],[self.mulabels[0]],[copy.deepcopy(self.parameters[0])],
-                                                   [self.model[0]],[self.optimizer[0]])
-                        self.trained = True
-                        if self.keepscore>2:
-                            print('*** Same-Class Codevectors Pruned ***')
+            # if self.parent:
+            #     if (not self.regression) and len(np.unique(self.parent.myLabels[-1]))>1:
+            #         if len(np.unique(self.labels))==1:
+            #             self.overwrite_codevectors([self.x[0]],[self.labels[0]],[copy.deepcopy(self.parameters[0])],
+            #                                        [self.model[0]],[self.optimizer[0]])
+            #             self.trained = True
+            #             if self.keepscore>2:
+            #                 print('*** Same-Class Codevectors Pruned ***')
     
             # Find idle siblings and prune them
             if self.parent:
                 for sibling in self.parent.children:
                     if sibling.current_sample == 0:
-                        sibling.overwrite_codevectors([sibling.y[0]],[sibling.ylabels[0]],[copy.deepcopy(sibling.yext[0])],
+                        sibling.overwrite_codevectors([sibling.x[0]],[sibling.labels[0]],[copy.deepcopy(sibling.parameters[0])],
                                                       [sibling.model[0]],[sibling.optimizer[0]])
                         sibling.trained = True
-                        if self.keepscore>2:
+                        if self.verbose==2:
                             print('*** Idle Sibling Pruned ***')
     
     # Check Untrained Siblings
@@ -1045,13 +1128,13 @@ class ODA:
         if self.parent:
             for sibling in self.parent.children:
                 if sibling.current_sample == 0:
-                    sibling.overwrite_codevectors([sibling.y[0]],[sibling.ylabels[0]],[copy.deepcopy(sibling.yext[0])],
+                    sibling.overwrite_codevectors([sibling.x[0]],[sibling.labels[0]],[copy.deepcopy(sibling.parameters[0])],
                                                   [sibling.model[0]],[sibling.optimizer[0]])
                     sibling.trained = True
-                    if self.keepscore>2:
+                    if self.verbose==2:
                         print('*** Idle Sibling Pruned (check_untrained_siblings) ***')
         
-        # Idle siblings have len(myY)=1
+        # Idle siblings have len(myX)=1
                     
                         
     # Increase Counter for Desired Error Reached 
@@ -1079,7 +1162,25 @@ class ODA:
         else:
             self.error_threshold_reached = 0
     
-    
+    # Load ODA Model
+    # TODO: Extend to go back in timeline 
+    ###########################################################################
+    def load(self, T=None):
+        
+        self.perturbed = False
+        self.converged = False
+        self.trained = False
+        self.bb = self.bb_init
+        
+        if T:
+            self.T = T
+        
+        self.tik = time.perf_counter()
+        self.tok = time.perf_counter()            
+        
+        if len(self.children)>0:
+            for child in self.children:
+                child.load()
                 
     
     ###########################################################################
@@ -1088,152 +1189,143 @@ class ODA:
     
     # Compute Score
     ###########################################################################
-    def score(self, data, labels, recursive=1e3):
+    def score(self, data_x, data_y=None, labels=None, recursive=1e3):
+        
+        if data_x is None: 
+            return 1.0, 1.0, 1.0
+
         if self.parent:
-            return self.parent.score(data, labels)
-        else:
-            classification = True if len(self.classes)>1 else False
-            d = 0.0
-            for i in range(len(data)):
-                if self.regression:
-                    d += self.datum_regression_error(data[i], labels[i], recursive)         
-                elif classification:
-                    d += self.datum_classification_error(data[i], labels[i], recursive)
-                else:
-                    d += self.datum_dissimilarity(data[i], labels[i], recursive)         
-            return d/len(data) #if classification else d      
+            return self.parent.score(data_x, data_y, labels, recursive)
+        
+        d_clustering = 0.0
+        d_regression = 0.0
+        d_classification = 0.0
+
+        for i in range(len(data_x)):
+            d_x, d_y, d_c = self.datum_score(data_x[i],data_y[i],labels[i],recursive)
+            d_clustering += d_x
+            d_regression += d_y
+            d_classification += d_c
+
+        return d_clustering/len(data_x), d_regression/len(data_x), d_classification/len(data_x) 
     
+    # Compute All Scores between Codebook and Input Vector
+    ###########################################################################
+    def datum_score(self, datum_x, datum_y=None, label=None, recursive=1e3):
     
+        d_clustering = 1.0
+        d_regression = 1.0
+        d_classification = 1.0
+
+        if datum_x is None: 
+            return d_clustering, d_regression, d_classification
+        
+        x = self.myX[-1]
+        j,d = self.winner(x, datum_x[self.layers[self.mylayer]])
+        
+        if recursive>0 and len(self.children) > 0 and len(self.children[j].myX)>1:
+            return self.children[j].datum_score(datum_x, datum_y, label, recursive-1)
+        
+        d_clustering = d 
+        if datum_y is not None:
+            y = self.myY[-1][j]
+            d_regression = self.BregmanD(datum_y, y)
+            # TODO: When I am using model and parameters?
+        if label is not None: 
+            decision_label = self.myLabels[-1][j]
+            d_classification = 0.0 if decision_label == label else 1.0
+        
+        return d_clustering, d_regression, d_classification 
+        
     # Compute Dissimilarity between Codebook and Input Vector
     ###########################################################################
-    def datum_dissimilarity(self, datum, label, recursive=1e3):
+    def datum_dissimilarity(self, datum_x, recursive=1e3):
     
-        y = self.myY[-1]
-        j,d = self.winner(np.array(y), np.array(datum[self.resolution]))
+        x = self.myX[-1]
+        j,d = self.winner(x, datum_x[self.layers[self.mylayer]])
         
-        if recursive>0 and len(self.children) > 0 and len(self.children[j].myY)>1:
-            return self.children[j].datum_dissimilarity(datum,label,recursive-1)
-        else:
-            return d   
+        if recursive>0 and len(self.children) > 0 and len(self.children[j].myX)>1:
+            return self.children[j].datum_dissimilarity(datum_x,recursive-1)
+        
+        return d   
     
-    # Find best representative
+    # Compute Regression Error between Codebook and Input Vector
     ###########################################################################
-    def represent(self, datum, recursive=1e3):
+    def datum_regression_error(self, datum_x, datum_y, recursive=1e3):
     
-        y = self.myY[-1]
-        j,d = self.winner(np.array(y), np.array(datum[self.resolution]))
+        x = self.myX[-1]
+        j,_ = self.winner(x, datum_x[self.layers[self.mylayer]])
         
-        if recursive>0 and len(self.children) > 0 and len(self.children[j].myY)>1:
-            return self.children[j].represent(datum,recursive-1)
-        else:
-            return self.myY[-1][j], self.myYlabels[-1][j], j
+        if recursive>0 and len(self.children) > 0 and len(self.children[j].myX)>1:
+            return self.children[j].datum_regression_error(datum_x,datum_y,recursive-1)
+        
+        y = self.myY[-1][j]
+        d = self.BregmanD(datum_y, y) 
+        return d
+        
+    # Compute Classification Error between Codebook and Input Vector 
+    ###########################################################################
+    def datum_classification_error(self, datum_x, label, recursive=1e3):
+        
+        x = self.myX[-1]
+        j,_ = self.winner(x, datum_x[self.layers[self.mylayer]])
+        
+        ## if I have children and the winner child has converged at least once
+        if recursive>0 and len(self.children)>0 and len(self.children[j].myX)>1: 
+            return self.children[j].datum_classification_error(datum_x,label,recursive-1)
+        
+        decision_label = self.myLabels[-1][j]
+        d = 0 if np.all(decision_label == label) else 1
+        return d    
+        
+    # Find best representative, predict y, predict label
+    ###########################################################################
+    def predict(self, datum_x, recursive=1e3):
     
+        x = self.myX[-1]
+        j,_ = self.winner(x, datum_x[self.layers[self.mylayer]])
+        
+        if recursive>0 and len(self.children) > 0 and len(self.children[j].myX)>1:
+            return self.children[j].predict(datum_x,recursive-1)
+        
+        return self.myX[-1][j], self.myY[-1][j], self.myLabels[-1][j], j
+        # if len(self.myX)>0 else None
+
     # Return Codebook
     ###########################################################################
     def codebook(self, recursive=1e3):
     
         if recursive>0 and len(self.children) > 0:
             cb = []
+            cby = []
             cbl = []
             for child in self.children:
-                # if len(child.myY)>1: # check why. it has to do with prune siblings
-                if len(child.myY)>0: 
-                    tcb,tcbl = child.codebook(recursive-1)
+                # if len(child.myX)>1: # check why. it has to do with prune siblings
+                if len(child.myX)>0: 
+                    tcb,tcby,tcbl = child.codebook(recursive-1)
                     cb = cb + tcb
+                    cby = cby + tcby
                     cbl = cbl + tcbl
-            return cb, cbl
-        else:
-            return self.myY[-1], self.myYlabels[-1]   
+            return cb, cby, cbl
+        
+        return self.myX[-1], self.myY[-1], self.myLabels[-1]   
+        # TODO: When using model and parameters?
     
-    
-    # Compute Classification Error between Codebook and Input Vector 
+    # Find Winner Codevector
     ###########################################################################
-    def datum_classification_error(self, datum, label, recursive=1e3):
-        
-        y = self.myY[-1]
-        j,_ = self.winner(np.array(y), np.array(datum[self.resolution]))
-        
-        ## if I have children and the winner child has converged at least once
-        if recursive>0 and len(self.children)>0 and len(self.children[j].myY)>1: 
-            return self.children[j].datum_classification_error(datum,label,recursive-1)
-        else:
-            decision_label = self.myYlabels[-1][j]
-            d = 0 if np.all(decision_label == label) else 1
-            return d      
-    
-    # Compute Regression Error between Codebook and Input Vector
-    ###########################################################################
-    def datum_regression_error(self, datum, label, recursive=1e3):
-    
-        y = self.myY[-1]
-        j,d = self.winner(np.array(y), np.array(datum[self.resolution]))
-        
-        if recursive>0 and len(self.children) > 0 and len(self.children[j].myY)>1:
-            return self.children[j].datum_dissimilarity(datum,label,recursive-1)
-        else:
-            decision_label = self.myYlabels[-1][j]
-            d = self.BregmanD(label, decision_label) 
-            return d
-        
-    # Predict 
-    ###########################################################################
-    def predict(self, datum, recursive=1e3):
-        
-        y = self.myY[-1]
-        j,_ = self.winner(np.array(y), np.array(datum[self.resolution]))
-        
-        ## if I have children and the winner child has converged at least once
-        if recursive>0 and len(self.children)>0: 
-            if len(self.children[j].myY)>1: 
-                return self.children[j].predict(datum,recursive-1)
-            else:
-                decision_label = self.myYlabels[-1][j]
-                return decision_label
-        else:
-            decision_label = self.myYlabels[-1][j]
-            return decision_label    
-    
-    # Voronoi
-    ###########################################################################
-    def voronoi(self,ctr=-1,points=[],recursive=0,child_ctr=[],add_parent=True):
-        
-        def proj_back(x):
-            u = np.array([1,1])
-            u = u/np.linalg.norm(u)
-            x = np.array(x)
-            return np.array(u*x)
-        
-        centroids = self.myY[ctr]
-        if len(centroids[0])<2:
-            centroids = [proj_back(cd) for cd in centroids]
+    def winner(self, mu, datum):
 
-        if len(points)==0:
-            delta=0.005
-            xm = np.arange(0.0, 1.0, delta)
-            ym = np.arange(0.0, 1.0, delta)
-            points = [np.array([xi,yi]) for xi in xm for yi in ym]
-        
-        edges = []
-        regions = [[] for i in range(len(centroids))]
-        for di in points:
-            dists = [self.BregmanD(di,np.array(yj)) for yj in centroids]
-            idx = np.argsort(dists)
-            j = idx[0]
-            regions[j].append(di)
-            if len(dists)>1 and np.abs(dists[idx[0]]-dists[idx[1]])<1/4*1e-0*self.myT[ctr]:
-                edges.append(di)
-        
-        if not add_parent:
-            edges = []
-        
-        if recursive>0 and len(self.children)>0:
-            if len(child_ctr)==0:
-                child_ctr = [-1 for i in range(len(self.children))]
-            for i in range(len(self.children)):
-                child = self.children[i]
-                edges=edges + child.voronoi(ctr=child_ctr[i],points=regions[i],recursive=recursive-1)
-        
-        return edges
+        mu = np.array(mu, dtype=DTYPE)  # Ensure mu is a NumPy array
+        datum = datum.astype(DTYPE)
+
+        if self.jit:
+            j, d = _winner(mu, datum, phi=self.Bregman_phi)
+        else:
+            dists = [self.BregmanD(datum, yj) for yj in mu]
+            j = np.argmin(dists)
+            d = dists[j]
+            
+        return j, d
     
     # Bregman Divergences (Python Implementation)
     ###########################################################################
@@ -1256,7 +1348,6 @@ class ODA:
                 d = np.dot(x,np.log(x)-np.log(y)) - np.sum(x-y)
         
         return d
-
     
     # Bregman Divergence Derivatives (Python Implementation)
     ###########################################################################
@@ -1280,47 +1371,30 @@ class ODA:
         
         return dd
     
-    
-    # Find Winner Codevector
-    ###########################################################################
-    def winner(self, y, datum):
 
-        if self.input_len!=None: 
-            datum = datum[:self.input_len]
-            y = np.array([yy[:self.input_len] for yy in y])
-
-        if self.jit:
-            j,d = _winner(y, datum, phi=self.Bregman_phi)
-        else:
-            dists = [self.BregmanD(datum,yj) for yj in y]
-            j = np.argmin(dists)
-            d = dists[j]
-            
-        return j, d
-    
-    
-    
-    ###########################################################################    
+    #%% ###########################################################################    
     ### Plotting Functions
-    ###########################################################################
-    
+    ###############################################################################
 
-    def plot_curve(self,figname,show = False,save = False,
-                    # Parameters
-                    fig_size=(8,6),
-                    font_size = 28,
-                    label_size = 20,
-                    legend_size = 32,
-                    line_width = 12,
-                    marker_size = 8,
+    # Performance Curve
+    ###############################################################################
+    def plot_curve(self, error_type=0, 
+                   figname='', show = False, save = False,
+                    fig_size=(9,5),
+                    font_size = 20,
+                    label_size = 16,
+                    legend_size = 18,
+                    line_width = 6,
+                    marker_size = 6,
                     fill_size=10,
-                    line_alpha = 0.6,
+                    line_alpha = 0.8,
                     txt_size = 32,
                     txt_x = 1.0,
                     txt_y = 0.03,
                     font_weight = 'bold', 
-                    ylim = 0.5
-                   ):
+                    ylim = 0.5,
+                    dpi=300
+                    ):
         
         # Variables        
         
@@ -1329,8 +1403,9 @@ class ODA:
         tK=[]
         tL=[]
         myT = []
+        myX = []
         myY = []
-        myYlabels = []
+        myLabels = []
         myTrainError = []
         myTestError = []
         myLoops = []    
@@ -1358,13 +1433,22 @@ class ODA:
             tK.append(self.myTreeK[i+1])
             tL.append(self.myTreeLoops[i+1])
             myT.append(node.myT[node.plt_counter])
+            myX.append(node.myX[node.plt_counter])
             myY.append(node.myY[node.plt_counter])
-            myYlabels.append(node.myYlabels[node.plt_counter])
-            myTrainError.append(node.myTrainError[node.plt_counter])
-            myTestError.append(node.myTestError[node.plt_counter])
+            myLabels.append(node.myLabels[node.plt_counter])
             myLoops.append(node.myLoops[node.plt_counter])   
             myTime.append(node.myTime[node.plt_counter])
             
+            try:
+                myTrainError.append(node.myTrainError[node.plt_counter])
+            except:
+                myTrainError.append([])
+
+            try:
+                myTestError.append(node.myTestError[node.plt_counter])
+            except:
+                myTestError.append([])
+
             node.plt_counter += 1
         
         import matplotlib.colors as mcolors
@@ -1376,30 +1460,37 @@ class ODA:
         # Performance VS Time
         #######################################################################
         
-        fig,ax = plt.subplots(figsize=fig_size,tight_layout = {'pad': 1})
+        fig,ax = plt.subplots(figsize=fig_size,tight_layout = {'pad': 1},dpi=dpi)
         
         # Label axes
-        # ax.set_ylim(-0.05,ylim+0.01)
+        ax.set_ylim(-0.01,ylim+0.01)
         ax.set_xlabel('time (s)', fontsize = font_size)
-        ylabel = '% error' if len(self.classes)>1 else 'distortion (ave.)'
+        ylabel = '% error'
         ax.set_ylabel(ylabel, fontsize = font_size)
         ax.tick_params(axis='both', which='major', labelsize=label_size)
         ax.tick_params(axis='both', which='minor', labelsize=8)
 
         x= [t - myTime[0] for t in myTime]
-        y=myTrainError
-        clr=colors[0]
-        mrkr = markers[0]
-        ax.plot(x, y, label='Train', 
-          color=clr, marker=mrkr,linestyle='solid', 
-          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
-                
-        y=myTestError
-        clr=colors[1]
-        mrkr = markers[1]
-        ax.plot(x, y, label='Test', 
-          color=clr, marker=mrkr,linestyle='solid', 
-          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+
+        try:
+            y=[e[error_type] for e in myTrainError]
+            clr=colors[0]
+            mrkr = markers[0]
+            ax.plot(x, y, label='Train',
+                color=clr, marker=mrkr,linestyle='solid', 
+                linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+        except:
+            pass
+        
+        try:     
+            y=[e[error_type] for e in myTestError]
+            clr=colors[1]
+            mrkr = markers[1]
+            ax.plot(x, y, label='Test', 
+                color=clr, marker=mrkr,linestyle='solid', 
+                linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+        except:
+            pass
 
         plt.legend(loc='lower left',prop={'size': legend_size})
         
@@ -1408,15 +1499,15 @@ class ODA:
         mrkr = markers[2]
         ax2 = ax.twinx()
         ax2.plot(x, y, label='Samples', 
-          color=clr, marker=mrkr,linestyle='solid', 
-          linewidth=line_width, markersize=marker_size,alpha=line_alpha/5)
+            color=clr, marker=mrkr,linestyle='solid', 
+            linewidth=line_width, markersize=marker_size,alpha=line_alpha/5)
         ax2.set_ylabel('Samples', fontsize = font_size)
         ax2.tick_params(axis='both', which='major', labelsize=label_size)
         ax2.tick_params(axis='both', which='minor', labelsize=8)
         
         plt.grid(color='gray', linestyle='-', linewidth=1, alpha = 0.1)
         plt.legend(loc='upper right',prop={'size': legend_size})
-    
+
         if save:
             fig.savefig(figname+'errorVStime.png', format = 'png')
         if show:
@@ -1428,65 +1519,152 @@ class ODA:
         # Performance VS K
         #######################################################################
         
-        fig,ax = plt.subplots(figsize=fig_size,tight_layout = {'pad': 1})
-        
-        # Label axes
-        # ax.set_ylim(-0.05,ylim+0.01)
-        ax.set_xlabel(r'$-\log(1/T)$', fontsize = font_size)
-        ylabel = '# K'
-        ax.set_ylabel(ylabel, fontsize = font_size)
-        ax.tick_params(axis='both', which='major', labelsize=label_size)
-        ax.tick_params(axis='both', which='minor', labelsize=8)
-    
-        x= [-np.log10(t) for t in myT]
-        y=tK
-        clr=colors[2]
-        mrkr = markers[2]
-        ax.plot(x, y, label='K', 
-          color=clr, marker=mrkr,linestyle='solid', 
-          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
-        
-        plt.legend(loc='upper right',prop={'size': legend_size})
-        
-        y=myTrainError
-        clr=colors[0]
-        mrkr = markers[0]
-        ax2 = ax.twinx()
-        ax2.plot(x, y, label='Train', 
-          color=clr, marker=mrkr,linestyle='solid', 
-          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
-        y=myTestError
-        clr=colors[1]
-        mrkr = markers[1]
-        ax2.plot(x, y, label='Test', 
-          color=clr, marker=mrkr,linestyle='solid', 
-          linewidth=line_width, markersize=marker_size,alpha=line_alpha)
-        ylabel = '% error' if len(self.classes)>1 else 'distortion (ave.)'
-        ax2.set_ylabel(ylabel, fontsize = font_size)
-        ax2.tick_params(axis='both', which='major', labelsize=label_size)
-        ax2.tick_params(axis='both', which='minor', labelsize=8)
-        
-        plt.grid(color='gray', linestyle='-', linewidth=1, alpha = 0.1)
-        plt.legend(loc='lower left',prop={'size': legend_size})
-    
-        if save:
-            fig.savefig(figname+'TvsK.png', format = 'png')
-        if show:
-            plt.show()
-        else:
-            plt.close()
+        if False:
+            fig,ax = plt.subplots(figsize=fig_size,tight_layout = {'pad': 1},dpi=dpi)
+            
+            # Label axes
+            # ax.set_ylim(-0.05,ylim+0.01)
+            ax.set_xlabel(r'$-\log(1/T)$', fontsize = font_size)
+            ylabel = '# K'
+            ax.set_ylabel(ylabel, fontsize = font_size)
+            ax.tick_params(axis='both', which='major', labelsize=label_size)
+            ax.tick_params(axis='both', which='minor', labelsize=8)
+
+            x= [-np.log10(t) for t in myT]
+            y=tK
+            clr=colors[2]
+            mrkr = markers[2]
+            ax.plot(x, y, label='K', 
+                color=clr, marker=mrkr,linestyle='solid', 
+                linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+            
+            plt.legend(loc='upper right',prop={'size': legend_size})
+            
+            try:
+                y=[e[error_type] for e in myTrainError]
+                clr=colors[0]
+                mrkr = markers[0]
+                ax2 = ax.twinx()
+                ax2.plot(x, y, label='Train', 
+                    color=clr, marker=mrkr,linestyle='solid', 
+                    linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+            except: 
+                pass
+
+            try:
+                y=[e[error_type] for e in myTestError]
+                clr=colors[1]
+                mrkr = markers[1]
+                ax2.plot(x, y, label='Test', 
+                    color=clr, marker=mrkr,linestyle='solid', 
+                    linewidth=line_width, markersize=marker_size,alpha=line_alpha)
+                ylabel = '% error' 
+                ax2.set_ylabel(ylabel, fontsize = font_size)
+                ax2.tick_params(axis='both', which='major', labelsize=label_size)
+                ax2.tick_params(axis='both', which='minor', labelsize=8)
+            except:
+                pass
+            
+            plt.grid(color='gray', linestyle='-', linewidth=1, alpha = 0.1)
+            plt.legend(loc='lower left',prop={'size': legend_size})
+
+            if save:
+                fig.savefig(figname+'TvsK.png', format = 'png')
+            if show:
+                plt.show()
+            else:
+                plt.close()
         
         return ax
-        
+    
 #%% ###########################################################################    
 ### Numba Jit Functions
 ###############################################################################
 
+# Stochastic Approximation Update
+###############################################################################
+
+@njit(fastmath=True, cache=True)
+def _sa_update(mu, labels, px, sx,  
+               datum, datum_label, lenx, observe_xy, 
+               sep, T, bb, phi='phi_Eucl'):
+    
+    pzero = np.float32(1e-9)
+    T_inv = np.float32( (1-T) / T )
+    K = mu.shape[0]
+    bb_step = np.float32( 1 / (bb+1) )
+
+    for k in range(K): 
+
+        px_classification = px.astype(px.dtype)
+        if sep:
+            for i in range(K):
+                if datum_label != labels[i]:
+                    px_classification[i]=np.float32(0.0)
+
+        # if px_classification[k] == 0.0:
+        #     continue 
+
+        pxk = px[k]
+        muk = mu[k]
+        sxk = sx[k]
+        labelsk = labels[k]
+        
+        # Calculate distances and Gibbs probabilities 
+        dists = np.zeros(K, dtype=mu.dtype)
+        for i in range(K):
+            if observe_xy:
+                dists[i] = _BregmanD(datum, mu[i], phi)
+            else:
+                dists[i] = _BregmanD(datum[:lenx], mu[i][:lenx], phi)
+        gibbs = np.exp(-dists * T_inv)
+
+        # Calculate hat_pmu[k]
+        pxkhat = np.float32(0.0)
+        pxk_sum = np.sum(px_classification * gibbs) # dot product
+        if pxk_sum > 0: 
+            pxkhat = px_classification[k] * gibbs[k] / pxk_sum
+        else: # e.g. if no codevectors of the same class as observation (not expected behavior)
+            pxkhat = np.float32(0.0) # set it zero (or break)
+
+        # SA update 
+        pxk = pxk + bb_step * (pxkhat - pxk)
+        sxk = sxk + bb_step * (pxkhat*datum - sxk)
+        if pxk>0: # (avoiding division by zero)
+            muk = sxk/pxk
+        # else:
+        #     muk = sigmamuk/pmuk
+
+        if phi == 'phi_KL':
+            for i in range(muk.shape[0]):
+                if muk[i]<pzero:
+                    muk[i] = pzero
+
+        px[k] = pxk
+        sx[k] = sxk
+        mu[k] = muk
+        labels[k] = labelsk
+
+    return px, sx, mu
+
+
+# LVQ Gradient Descent Update
+###############################################################################
+@njit(fastmath=True, cache=True)
+def _lvq_update(mu, labels, datum, datum_label, lenx, bb, phi='phi_Eucl'):
+    
+    j,_ = _winner(mu[:lenx], datum[:lenx], phi)
+    s = 1 if (labels[j]==datum_label) else -1
+    
+    # LVQ Update
+    mu[j] = mu[j] - 1/(bb+1) * s * _dBregmanD(datum,mu[j],phi)
+        
+    return mu
 
 # Find Winner Codevector
 ###############################################################################
 @njit(cache=True,nogil=True)
-def _winner(y, datum, phi='phi_KL'):
+def _winner(y, datum, phi='phi_Eucl'):
     dists = np.zeros(len(y))
     for i in range(len(y)):
         dists[i]=_BregmanD(datum,y[i],phi)
@@ -1496,16 +1674,16 @@ def _winner(y, datum, phi='phi_KL'):
 
 # Compute Bregman Divergence
 ###############################################################################
-@njit(cache=True,nogil=True)
-def _BregmanD(x, y, phi='phi_KL'):
+@njit(fastmath=True, cache=True,nogil=True)
+def _BregmanD(x, y, phi='phi_Eucl'):
     if phi == 'phi_Eucl':
-        d = _dot(x-y,x-y)
+        d = np.sum((x-y)*(x-y))
     elif phi == 'phi_KL':
-        pzero = 1e-9
+        pzero = np.float32(1e-9)
         logx = np.zeros_like(x)
         logy = np.zeros_like(y)
-        sxy=0
-        for i in range(len(x)):
+        sxy=np.float32(0)
+        for i in range(x.shape[0]):
             if x[i]<pzero:
                 x[i]=pzero
             if y[i]<pzero:
@@ -1513,20 +1691,20 @@ def _BregmanD(x, y, phi='phi_KL'):
             logx[i] = np.log(x[i])
             logy[i] = np.log(y[i])
             sxy += x[i]-y[i]
-        d = _dot(x,logx-logy) - sxy
+        d = np.sum(x * (logx-logy)) - sxy
     return d
 
 
 # Compute Bregman Divergence Derivative
 ###############################################################################
-@njit(cache=True,nogil=True)
-def _dBregmanD(x, y, phi='phi_KL'):
+@njit(fastmath=True, cache=True,nogil=True)
+def _dBregmanD(x, y, phi='phi_Eucl'):
     if phi == 'phi_Eucl':
         dd = -2*(x-y)
     elif phi == 'phi_KL':
         pzero = 1e-9
-        dd = np.zeros([len(x)])
-        for i in range(len(x)):
+        dd = np.zeros([x.shape[0]])
+        for i in range(x.shape[0]):
             if x[i]<pzero:
                 x[i]=pzero
             if y[i]<pzero:
@@ -1535,134 +1713,26 @@ def _dBregmanD(x, y, phi='phi_KL'):
     return dd
 
 
-# Compute Dot Product
-###############################################################################
-@njit(cache=True,nogil=True)
-def _dot(x, y):
-    s = 0.0
-    for i in range(len(x)):
-        s += x[i]*y[i]
-    return s
-        
-# Compute Weighted Dot Product
-###############################################################################
-@njit(cache=True,nogil=True)
-def _wdot(x, y):
-    s = 0.0
-    aa = [1,1.0]
-    for i in range(len(x)):
-        s += aa[i]*x[i]*y[i]
-    return s
 
 
-# Stochastic Approximation Update
-###############################################################################
-@njit(cache=True)
-def _sa_update(idx, y, ylabels, py, sxpy, slpy, datum, datum_label, regression, sep, T, bb, phi='phi_KL'):
-    
-    pzero = 1e-9
-    
-    selfpy = py[idx]
-    selfsxpy = sxpy[idx]
-    selfslpy = slpy[idx]
-    
-    T_inv = (1-T)/T
-    
-    if sep and not regression:
-        for i in range(len(py)):
-            if datum_label != ylabels[i]:
-                py[i]=0
-    
-    dists = np.zeros(len(y))
-    gibbs = np.zeros(len(y))
-    
-    for i in range(len(y)):
-        dists[i]=_BregmanD(datum,y[i],phi)
-        # gibbs[i] = np.exp(-dists[i]/T)
-        gibbs[i] = np.exp(-dists[i]*T_inv)
-    
-    pyx_sum = _dot(py,gibbs)
-    
-    pyx = 0.0
-    if pyx_sum == 0: # e.g. if no codevectors of the same class as observation
-        pyx = 0 # set it zero (or break)
-    else:    
-        pyx = py[idx]*gibbs[idx]/pyx_sum
-    
-    # SA update
-    pypy = selfpy + 1/(bb+1)*(pyx - selfpy)
-    sxpysxpy = selfsxpy + 1/(bb+1)*(pyx*datum - selfsxpy)
-    yy = sxpysxpy/pypy
-    
-    slpyslpy=selfslpy
-    yylabel = ylabels[idx]
-    if regression:
-        slpyslpy = selfslpy + 1/(bb+1)*(pyx*datum_label - selfslpy)
-        yylabel = slpyslpy/pypy
-    
-    
-    if phi == 'phi_KL':
-        for i in range(len(yy)):
-            if yy[i]<pzero:
-                yy[i] = pzero
-    
-    return pypy,sxpysxpy,yy,slpyslpy,yylabel
 
 
-# LVQ Gradient Descent Update
-###############################################################################
-@njit(cache=True)
-def _lvq_update(idx, y, ylabels, py, sxpy, slpy, datum, datum_label, regression, sep, T, bb, phi='phi_KL'):
-    
-    j,_ = _winner(y, datum, phi)
-    s = 1 if (ylabels[j]==datum_label or regression) else -1
-    yylabels = ylabels
-    
-    # LVQ Update
-    yyj = y[j] - 1/(bb+1) * s * _dBregmanD(datum,y[j],phi)
-    yy=y.copy()
-    yy[j] = yyj
-    if regression:
-        yylabelj = ylabels[j] - 1/(bb+1) * s * _dBregmanD(datum_label,ylabels[j],phi)
-        yylabels=ylabels.copy()
-        yylabels[j] = yylabelj
-        
-    return 1.0,np.zeros([len(yy)]),yy,0,yylabels
 
 
-#%% ###########################################################################
-### Multi_Thread Implementation
-###############################################################################
 
 
-# Prediction Step
-###############################################################################
-# def _predict_threads(y, ylabels, data):
-#     out = np.zeros(len(data))
-#     with concurrent.futures.ThreadPoolExecutor() as executor:
-#         args = ((y,ylabels,datum) for datum in data) 
-#         res = executor.map(_datum_predict_threads,args)
-#     for i,r in enumerate(res):
-#         out[i]=r
-#     return out
 
-    
-# Single Prediction Step
-###############################################################################
-# @njit(cache=True, nogil=True)
-# def _datum_predict_threads(args):
-#     y, ylabels, datum = args
-#     dists = np.zeros(len(y))
-#     for i in range(len(y)):
-#         dists[i]=_BregmanD(datum,y[i])
-#     j = np.argmin(dists)
-#     return ylabels[j]
+
+
+
+
 
 #%%
 
 """
 Tree-Structured (Multi-Resolution) Online Deterministic Annealing for Classification and Clustering
-Christos Mavridis & John Baras,
-Department of Electrical and Computer Engineering, University of Maryland
-<mavridis@umd.edu>
+Christos Mavridis,
+Department of Electrical Engineering and Computer Science, 
+KTH Royal Institute of Technology
+<mavridis@kth.se>
 """

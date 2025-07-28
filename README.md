@@ -1,3 +1,8 @@
+# Dev
+
+Last stable version: oda_stable.py
+Currently building: oda_new.py
+
 # Online Deterministic Annealing (ODA)
 
 > A general-purpose learning model designed to meet the needs of applications in which computational resources are limited, and robustness and interpretability are prioritized.
