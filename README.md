@@ -1,8 +1,3 @@
-# Dev
-
-Last stable version: oda_stable.py
-Currently building: oda_new.py
-
 # Online Deterministic Annealing (ODA)
 
 > A general-purpose learning model designed to meet the needs of applications in which computational resources are limited, and robustness and interpretability are prioritized.
@@ -15,30 +10,19 @@ Currently building: oda_new.py
 >reinforcement learning [2], 
 >adaptive graph partitioning [3], and swarm leader detection.
 
-![](tutorials/img/2Dapproximation/app0.png)
-![](tutorials/img/2Dapproximation/app1.png)
-![](tutorials/img/2Dapproximation/app2.png)
-![](tutorials/img/2Dapproximation/original.png)
+![](tests/tutorials/img/2Dapproximation/app0.png)
+![](tests/tutorials/img/2Dapproximation/app1.png)
+![](tests/tutorials/img/2Dapproximation/app2.png)
+![](tests/tutorials/img/2Dapproximation/original.png)
 
 ## Contact 
 
 Christos N. Mavridis, Ph.D. \
-Department of Electrical and Computer Engineering, \
-University of Maryland \
+Division of Decision and Control Systems \
+School of Electrical Engineering and Computer Science, \
+KTH Royal Institute of Technology \
 https://mavridischristos.github.io/ \
-```mavridis (at) umd.edu``` 
-
-## Setting up the venv
-
-First `cd` to the `e-programma/` directory (not `e_programma/`) and run:
-
-```bash
-conda deactivate # if you need to
-python3 -m venv .venv # if it is the first time
-source .venv/bin/activate
-pip install -r requirements.txt # if it is the first time
-pip install -r requirements-dev.txt # if you need to
-```
+```mavridis (at) kth.se``` 
 
 ## Description of the Optimization Algorithm
 
@@ -101,7 +85,7 @@ and provides a means
 to progressively increase the complexity of the learning model
 through an intuitive bifurcation phenomenon.
 	
-## Usage
+## Usage (Outdated)
 
 The ODA architecture is coded in the ODA class inside ```OnlineDeterministicAnnealing/oda.py```:
 	
@@ -148,7 +132,7 @@ For regression (piece-wise constant function approximation) replace:
     prediction = clf.predict(test_datum)
     error = clf.score(test_data, test_labels)
 
-## Useful Parameters
+## Useful Parameters (Outdated)
 
 ### Cost Function
 
@@ -210,61 +194,51 @@ The training data should look like this:
 
 	train_data = [[np.array, np.array, ...], [np.array, np.array, ...], [np.array, np.array, ...], ...]
 
-## Tutorials
+## Tutorials (Outdated)
 
 > [Clustering](https://colab.research.google.com/github/MavridisChristos/OnlineDeterministicAnnealing/blob/main/tutorials/tutorial-clustering.ipynb)
 
-![](tutorials/img/clustering/app0.png)
-![](tutorials/img/clustering/app1.png)
-![](tutorials/img/clustering/app2.png)
+![](tests/tutorials/img/clustering/app0.png)
+![](tests/tutorials/img/clustering/app1.png)
+![](tests/tutorials/img/clustering/app2.png)
 
 > [Classification](https://colab.research.google.com/github/MavridisChristos/OnlineDeterministicAnnealing/blob/main/tutorials/tutorial-classification.ipynb)
 
-![](tutorials/img/classification/app0.png)
-![](tutorials/img/classification/app1.png)
-![](tutorials/img/classification/app2.png)
+![](tests/tutorials/img/classification/app0.png)
+![](tests/tutorials/img/classification/app1.png)
+![](tests/tutorials/img/classification/app2.png)
 
 > [Regression](https://colab.research.google.com/github/MavridisChristos/OnlineDeterministicAnnealing/blob/main/tutorials/tutorial-regression.ipynb)
 
-![](tutorials/img/2Dapproximation/app0.png)
-![](tutorials/img/2Dapproximation/app1.png)
-![](tutorials/img/2Dapproximation/app2.png)
-![](tutorials/img/2Dapproximation/original.png)
+![](tests/tutorials/img/2Dapproximation/app0.png)
+![](tests/tutorials/img/2Dapproximation/app1.png)
+![](tests/tutorials/img/2Dapproximation/app2.png)
+![](tests/tutorials/img/2Dapproximation/original.png)
 
 ## Citing
 If you use this work in an academic context, please cite the following:
 
-[1] Christos N. Mavridis and John S. Baras, 
-"**[Online Deterministic Annealing for Classification and Clustering](https://arxiv.org/pdf/2102.05836.pdf)**",
-IEEE TCNS, 2022.
+    @article{mavridis2023annealing,
+        author = {Mavridis, Christos and Baras, John S.},
+        journal = {IEEE Transactions on Automatic Control},
+        title = {Annealing Optimization for Progressive Learning With Stochastic Approximation},
+        year = {2023},
+        volume = {68},
+        number = {5},
+        pages = {2862-2874},
+        publisher = {IEEE},
+    }
 
-    @article{mavridis2022online,
-          title={Online Deterministic Annealing for Classification and Clustering}, 
-          author={Mavridis, Christos N. and Baras, John S.},
-          journal={IEEE Transactions on Neural Networks and Learning Systems},
-          year={2022},
-          volume={},  
-          number={},  
-          pages={1-10},  
-          doi={10.1109/TNNLS.2021.3138676}
-          }
+or
+
+    @article{mavridis2023online,
+        title = {Online deterministic annealing for classification and clustering},
+        author = {Mavridis, Christos and Baras, John S},
+        journal = {IEEE Transactions on Neural Networks and Learning Systems},
+        year = {2023},
+        volume = {34},
+        number = {10},
+        pages = {7125-7134},
+        publisher = {IEEE},
+    }
 	  
-Other references:
-
-[2] Christos N. Mavridis and John S. Baras, 
-"**[Annealing Optimization for Progressive Learning with Stochastic Approximation](https://mavridischristos.github.io/publications.html)**",
-arXiv:2209.02826.
-
-[3] Christos N. Mavridis and John S. Baras, 
-"**[Maximum-Entropy Input Estimation for Gaussian Processes in Reinforcement Learning](https://mavridischristos.github.io/publications.html)**",
-CDC, 2021.
-
-[4] Christos N. Mavridis and John S. Baras, 
-"**[Progressive Graph Partitioning Based on Information Diffusion](https://mavridischristos.github.io/publications.html)**",
-CDC, 2021.
-	
-
-
-
-
-

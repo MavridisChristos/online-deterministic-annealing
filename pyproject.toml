@@ -4,52 +4,35 @@ build-backend = "hatchling.build"
 
 [project]
 name = "online-deterministic-annealing"
-version = "2025.0.0"
+version = "1.0.0"
 dependencies = [
-  "httpx",
-  "gidgethub[httpx]>4.0.0",
-  "django>2.1; os_name != 'nt'",
-  "django>2.0; os_name == 'nt'",
+  "numpy>=2.2.6",
+  "numba>=0.61.2",
+  "matplotlib>=3.10.3",
 ]
 requires-python = ">=3.8"
 authors = [
-  {name = "Pradyun Gedam", email = "pradyun@example.com"},
-  {name = "Tzu-Ping Chung", email = "tzu-ping@example.com"},
-  {name = "Another person"},
-  {email = "different.person@example.com"},
+  {name = "Christos Mavridis", email = "mavridis@kth.se"},
 ]
 maintainers = [
-  {name = "Brett Cannon", email = "brett@example.com"}
+  {name = "Christos Mavridis", email = "mavridis@kth.se"},
 ]
-description = "Lovely Spam! Wonderful Spam!"
-readme = "README.rst"
+description = "Online Deterministic Annealing Algorithm"
+readme = "README.md"
 license = "MIT"
 license-files = ["LICEN[CS]E.*"]
-keywords = ["egg", "bacon", "sausage", "tomatoes", "Lobster Thermidor"]
+keywords = ["annealing", "optimization", "machine learning", "clustering", "classification", "regression", "system identification", "hybrid system identification"]
 classifiers = [
   "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
   "Programming Language :: Python"
 ]
 
 [project.optional-dependencies]
-gui = ["PyQt5"]
-cli = [
-  "rich",
-  "click",
-]
+dev = [
+  "ipykernel>=6.29.5",
+  ]
 
 [project.urls]
-Homepage = "https://example.com"
-Documentation = "https://readthedocs.org"
-Repository = "https://github.com/me/spam.git"
-"Bug Tracker" = "https://github.com/me/spam/issues"
-Changelog = "https://github.com/me/spam/blob/master/CHANGELOG.md"
-
-[project.scripts]
-spam-cli = "spam:main_cli"
-
-[project.gui-scripts]
-spam-gui = "spam:main_gui"
-
-[project.entry-points."spam.magical"]
-tomatoes = "spam:main_tomatoes"
+Homepage = "https://mavridischristos.github.io/"
+Repository = "https://github.com/MavridisChristos/online-deterministic-annealing"

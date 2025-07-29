@@ -16,7 +16,6 @@ KTH Royal Institute of Technology
 
 import pickle
 import numpy as np
-
 # import os
 # import sys
 # sys.path.append(os.path.abspath('.'))
