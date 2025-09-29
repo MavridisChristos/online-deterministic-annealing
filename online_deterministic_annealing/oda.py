@@ -194,7 +194,7 @@ class ODA:
                  train_data_y=None, 
                  train_labels=None,
                  # Probability domain
-                 observe_xy = False, 
+                 observe_xy = [0], 
                  # Layers
                  layers = [0],
                  # Bregman divergence
@@ -235,9 +235,6 @@ class ODA:
         #    print("Please provide at least one data sample for initialization.")
         #    return
         
-        ### Probability domain  
-        self.observe_xy = observe_xy
-
         ### Tree-Structure Parameters
         
         self.id = node_id.copy()
@@ -249,6 +246,9 @@ class ODA:
         self.mylayer = len(self.id)-1
         self.timeline = [self.id]
         self.verbose = verbose
+
+        ### Objective weights
+        self.observe_xy = observe_xy[self.mylayer]
         
         ### Keep archive to pass multi-resolution parameters to children
         # !!! Revisit copy vs deepcopy here
@@ -368,6 +368,10 @@ class ODA:
         self.practical_zero = PRACTICAL_ZERO # for the log inside KL divergence
         self.jit = jit
 
+        self.e_p = self.BregmanD(np.atleast_1d(0),np.atleast_1d(0+perturb_param[self.mylayer]))            
+        self.e_n = self.BregmanD(np.atleast_1d(0),np.atleast_1d(0+effective_neighborhood[self.mylayer]))            
+        self.e_c = self.BregmanD(np.atleast_1d(0),np.atleast_1d(0+em_convergence[self.mylayer]))            
+
         # Data=dependent Initialization
         if train_data_x:
 
@@ -389,9 +393,9 @@ class ODA:
         perturb_param = self.perturb_param_arxiv
         effective_neighborhood = self.effective_neighborhood_arxiv
         em_convergence = self.em_convergence_arxiv
-        self.e_p = _BregmanD(np.array(x_init),np.array(x_init+perturb_param[self.mylayer]),self.Bregman_phi)            
-        self.e_n = _BregmanD(np.array(x_init),np.array(x_init+effective_neighborhood[self.mylayer]),self.Bregman_phi)            
-        self.e_c = _BregmanD(np.array(x_init),np.array(x_init+em_convergence[self.mylayer]),self.Bregman_phi)            
+        self.e_p = self.BregmanD(np.array(x_init),np.array(x_init+perturb_param[self.mylayer]))            
+        self.e_n = self.BregmanD(np.array(x_init),np.array(x_init+effective_neighborhood[self.mylayer]))            
+        self.e_c = self.BregmanD(np.array(x_init),np.array(x_init+em_convergence[self.mylayer]))            
     
         self.myK = [self.K]
         self.myT = [self.T]
@@ -717,10 +721,13 @@ class ODA:
                     else: 
                         px_classification = px
 
-                    if self.observe_xy:
-                        d = [self.BregmanD(datum,m) for m in mu]
-                    else:
-                        d = [self.BregmanD(datum[:lenx],m[:lenx]) for m in mu]
+                    # if self.observe_xy:
+                    #     d = [self.BregmanD(datum,m) for m in mu]
+                    # else:
+                    weight_x = 1-self.observe_xy
+                    weight_y = self.observe_xy
+                    d = [weight_x*self.BregmanD(datum[:lenx],m[:lenx]) 
+                         + weight_y*self.BregmanD(datum[lenx:],m[lenx:]) for m in mu]
 
                     pxk_sum = np.dot(px_classification,[np.exp(-dj*T_inv) for dj in d])
                     if pxk_sum == 0: # e.g. if no codevectors of the same class as observation
@@ -1613,10 +1620,14 @@ def _sa_update(mu, labels, px, sx,
         # Calculate distances and Gibbs probabilities 
         dists = np.zeros(K, dtype=mu.dtype)
         for i in range(K):
-            if observe_xy:
-                dists[i] = _BregmanD(datum, mu[i], phi)
-            else:
-                dists[i] = _BregmanD(datum[:lenx], mu[i][:lenx], phi)
+            # if observe_xy:
+            #     dists[i] = _BregmanD(datum, mu[i], phi)
+            # else:
+            weight_x = 1-observe_xy
+            weight_y = observe_xy
+            dists[i] = weight_x*_BregmanD(datum[:lenx], mu[i][:lenx], phi) + \
+                        weight_y*_BregmanD(datum[lenx:], mu[i][lenx:], phi)
+        
         gibbs = np.exp(-dists * T_inv)
 
         # Calculate hat_pmu[k]
@@ -1674,7 +1685,7 @@ def _winner(y, datum, phi='phi_Eucl'):
 
 # Compute Bregman Divergence
 ###############################################################################
-@njit(fastmath=True, cache=True,nogil=True)
+@njit(fastmath=True, cache=True, nogil=True)
 def _BregmanD(x, y, phi='phi_Eucl'):
     if phi == 'phi_Eucl':
         d = np.sum((x-y)*(x-y))
@@ -1697,7 +1708,7 @@ def _BregmanD(x, y, phi='phi_Eucl'):
 
 # Compute Bregman Divergence Derivative
 ###############################################################################
-@njit(fastmath=True, cache=True,nogil=True)
+@njit(fastmath=True, cache=True, nogil=True)
 def _dBregmanD(x, y, phi='phi_Eucl'):
     if phi == 'phi_Eucl':
         dd = -2*(x-y)

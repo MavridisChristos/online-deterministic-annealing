@@ -16,13 +16,84 @@ KTH Royal Institute of Technology
 
 import pickle
 import numpy as np
+import matplotlib.pyplot as plt
+import random
 # import os
 # import sys
-# sys.path.append(os.path.abspath('.'))
+# # sys.path.append(os.path.abspath('.'))
 # sys.path.append('/Users/cm/Documents/Github/online-deterministic-annealing/online_deterministic_annealing')
+# from oda import ODA
 
+# from pip install 
 from online_deterministic_annealing.oda import ODA
-from tests.data import domain_plots
+# from tests.data import domain_plots
+
+#%% Data
+
+data = []
+labels = []
+
+nblobs = 5
+centers = [[0.4,0.2],[0.25,0.55],[0.85,0.65],[0.7,0.4],[0.5,0.8]]
+sigmas = [0.005, 0.005, 0.005, 0.005, 0.005]
+labels = [0,0,0,1,1]
+
+ns = 120
+for i in range(nblobs):
+    cx = np.array(centers[i])
+    sx = sigmas[i]
+    newdata = np.random.multivariate_normal(cx, [[sx,0],[0,sx]],size=ns)
+    data = data + [n for n in newdata]
+    labels = labels + [labels[i] for t in range(ns)]
+
+# map to [0,1]
+train_min = np.min(np.min(data,0)) #-0.1
+train_max = np.max(np.max(data,0)) #+0.1
+train_domain = train_max-train_min 
+# add small margins so that we avoid 0.0 values (for KL divergence)
+train_min = train_min - 0.05*train_domain
+train_max = train_max + 0.05*train_domain
+train_domain = train_max-train_min 
+# transform
+data = (data-train_min)/train_domain
+
+fig = plt.figure()
+ax = fig.add_subplot(111, aspect='equal', autoscale_on=False,
+                     # xlim=(b-3, b+3), ylim=(b-3, b+3))
+                     xlim=(0, 1), ylim=(0, 1))
+# ax.grid(True)
+plt.xticks([0,1],'')
+plt.yticks([0,1],'')
+
+# data in 2D space
+x_plot = [data[i] for i in range(len(data)) if labels[i] == 0]
+y_plot = [data[i] for i in range(len(data)) if labels[i] == 1]
+
+## plot data 
+ax.plot([x_plot[i][0] for i in range(len(x_plot))],
+        [x_plot[i][1] for i in range(len(x_plot))],'k.',alpha=0.4)
+ax.plot([y_plot[i][0] for i in range(len(y_plot))],
+        [y_plot[i][1] for i in range(len(y_plot))],'r.',alpha=0.4)
+
+plt.show()
+
+random.shuffle(data)
+split_index = int(0.8 * len(data))
+train_data = data[:split_index]
+test_data = data[split_index:]
+
+#%% Initialize ODA 
+
+clf = ODA()
+
+
+#%%
+
+oda_data = [[d] for d in train_data]
+layers = [0]
+
+
+
 
 #%% Problem Parameters
 
@@ -127,22 +198,17 @@ print('*** ODA Initialized ***')
 print('*** ODA Start ***')
 
 # Fit Model
-clf.fit(train_data_x=train_data_x,
-        train_data_y=train_data_y,
-        train_labels=train_labels
-        )
+clf.fit(train_data_x=train_data_x,train_data_y=train_data_y,train_labels=train_labels)
 
 print('*** ODA Finish ***')
+
 
 # Plot Curve
 
 if plot_curve:
 
-    clf.plot_curve(error_type=0, 
-                   figname='./'+results_file+'/'+'demo',
-                   show=True, save = False,
-                   ylim = 0.5
-                   )
+    clf.plot_curve(error_type=0, figname='./'+results_file+'/'+'demo',show=True,save = False,
+                ylim = 0.5)
 
 # Plot Domain
 
