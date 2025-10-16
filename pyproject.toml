@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "online-deterministic-annealing"
+version = "1.0.1"
+dependencies = [
+  "numpy>=2.2.6",
+  "numba>=0.61.2",
+  "matplotlib>=3.10.3",
+  "scipy>=1.16.2",
+  "shapely>=2.1.2",
+]
+requires-python = ">=3.8"
+authors = [
+  {name = "Christos Mavridis", email = "mavridis@kth.se"},
+]
+maintainers = [
+  {name = "Christos Mavridis", email = "mavridis@kth.se"},
+]
+description = "Online Deterministic Annealing Algorithm"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICEN[CS]E.*"]
+keywords = ["annealing", "optimization", "machine learning", "clustering", "classification", "regression", "system identification", "hybrid system identification"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python"
+]
+
+[project.optional-dependencies]
+dev = [
+  "ipykernel>=6.29.5",
+  ]
+
+[project.urls]
+Homepage = "https://mavridischristos.github.io/"
+Repository = "https://github.com/MavridisChristos/online-deterministic-annealing"
