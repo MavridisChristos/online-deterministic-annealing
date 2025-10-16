@@ -7,7 +7,7 @@ pip install -r requirements.txt
 # pip install 
 
 change source files and metadata
-pip install --upgrade build
-build (creates dist folder)
-pip install --upgrade twine
-twine upload dist/* (PyPI credentials)
+python3 -m pip install --upgrade build
+python3 -m build (creates dist folder)
+python3 -m pip install --upgrade twine
+python3 -m twine upload dist/* (API Token saved in local folder)
