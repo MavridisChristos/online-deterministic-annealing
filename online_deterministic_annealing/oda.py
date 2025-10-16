@@ -1,25 +1,50 @@
-"""
-Tree-Structured (Multi-Resolution) Online Deterministic Annealing for Classification and Clustering
-Christos Mavridis,
-Department of Electrical Engineering and Computer Science, 
-KTH Royal Institute of Technology
-<mavridis@kth.se>
+#%% Author Information
+
 """
 
-#%% Import Modules
+Tree-Structured (Multi-Resolution) Online Deterministic Annealing for 
+Clustering, Regression, Classification, and Hybrid System Identification
 
-import time
-import numpy as np
-from numba import njit
-import copy
-import matplotlib.pyplot as plt
-# import pylab as pl
-# import concurrent.futures
-plt.ioff()
-    
-np.random.seed(13)
+Christos Mavridis 
 
-#%%
+School of Electrical and Computer Engineering, University of Maryland, College Park and
+Department of Electrical Engineering and Computer Science, KTH Royal Institute of Technology
+
+< mavridis (at) kth.se >
+< c.n.mavridis (at) gmail.com >
+
+https://mavridischristos.github.io/
+https://github.com/MavridisChristos
+
+"""
+
+#%% Dependencies
+
+'''
+
+dependencies = [
+  "numpy>=2.2.6",
+  "numba>=0.61.2",
+  "matplotlib>=3.10.3",
+]
+requires-python = ">=3.8"
+
+'''
+
+#%% Tutorial 
+
+'''
+
+clf = ODA()
+clf.fit(train_data_x, train_data_y, train_labels,
+        test_data_x, test_data_y, test_labels)
+
+hatX, hatY, hatLabel, hatMode = clf.predict(test_data_x)
+
+
+'''
+
+#%% README
 
 '''
 ODA Parameters
@@ -30,26 +55,29 @@ ODA Parameters
 - train_data_x
     # Single layer: [[np.array], [np.array], [np.array], ...]
     # Multiple Layers/Resolutions: [[np.array, np.array, ...], [np.array, np.array, ...], [np.array, np.array, ...], ...]
--train_data_y
+- train_data_y
     # [ np.array, np.array, np.array, ... ] (np.atleast1d())
 - train_labels
     # [ 0, 0, 0, ... ] (zero values for clustering)
     # [ int, int , int, ... ] (int values for classification with numba.jit)
-    
+- observe_xy = [0]
+    # value in [0,1]. 0 considers only x values, 1 considers only y values, 0.5 considers bothe x,y equally, etc..
     
 ### Bregman divergence
 
-- Bregman_phi = ['phi_KL']
+- Bregman_phi = ['phi_Eucl']
     # Defines Bregman divergence d_phi. 
     # Values in {'phi_Eucl', 'phi_KL'} (Squared Euclidean distance, KL divergence)
 
 
 ### Termination Criteria
 
-- Kmax = [100]
+- Kmax = [32]
     # Limit in node's children. After that stop growing
 - timeline_limit = 1e6
     # Limit in the number of convergent representations. (Developer Mode) 
+- error_type = [0] 
+    # 0:Clustering, 1:Regression, 2:Classification
 - error_threshold = [0.01] 
     # Desired training error. 
 - error_threshold_count = [3] 
@@ -59,11 +87,11 @@ ODA Parameters
 ### Temperature Schedule
 
 - Tmax = [0.9] 
-- Tmin = [1e-4]
+- Tmin = [1e-2]
     # lambda max min values in [0,1]. T = (1-lambda)/lambda
-- gamma_steady = [0.8] 
+- gamma_steady = [0.95] 
     # T' = gamma * T
-- gamma_schedule = [[0.1,0.5]] 
+- gamma_schedule = [[0.8,0.8]] 
     # Initial updates can be set to reduce faster
 
 
@@ -83,9 +111,7 @@ ODA Parameters
     # 1:ODA until Kmax. Then switch to 2:soft clustering with no perturbation/merging 
     # 2:soft clustering with no perturbation/merging 
     # 3: LVQ update (hard-clustering) with no perturbation/merging
-- regression = False
-    # if regression==True, run 2nd stochastic approximation for regression: data_label = f(x) in R
-- py_cut = [1e-5] 
+- px_cut = [1e-5] 
     # Parameter e_r: threshold to find idle codevectors
 - perturb_param = [1e-1] 
     # Perturb (dublicate) existing codevectors 
@@ -132,6 +158,7 @@ ODA MODEL Parameters
 
 # Tree Structure
 
+- self.id
 - self.parent
 - self.children
 
@@ -146,21 +173,23 @@ ODA MODEL Parameters
 
 # Variables
 
-- self.x = []
-- self.labels = []
-- self.parameters = []
-- self.model = []
-- self.optimizer = []
+- self.x 
+- self.y 
+- self.labels 
+- self.classes
+- self.parameters 
+- self.model 
+- self.optimizer 
 
-- self.py = []
-- self.sxpy= []
-- self.slpy= []
+- self.px 
+- self.sx 
 
 # History
 
 - self.myK 
 - self.myT 
 - self.myX 
+- self.myY 
 - self.myLabels 
 - self.myParameters
 - self.myModels
@@ -173,12 +202,46 @@ ODA MODEL Parameters
 - self.myTreeK 
 - self.myTreeLoops 
 
+# Convergence Parameters (development mode)
+
+- self.e_p
+- self.e_n
+- self.e_c
+- self.px_cut 
+- self.lvq 
+- self.convergence_loops 
+- self.error_type 
+- self.error_threshold 
+- self.error_threshold_count 
+- self.convergence_counter_threshold 
+- self.bb_init
+- self.bb_step 
+- self.separate 
+- self.stop_separation 
+- self.bb 
+- self.sa_steps 
+
 '''
+
+#%% Import Modules 
+
+import time
+import numpy as np
+from numba import njit
+import copy
+import matplotlib.pyplot as plt
+# import pylab as pl
+# import concurrent.futures
+
+#%% Global Parameters
 
 RANDOM_SEED = 13
 DTYPE = np.float64
 REGULATE_THRESHOLD = 5
 PRACTICAL_ZERO = 1e-9
+
+np.random.seed(RANDOM_SEED)
+# plt.ioff()
 
 #%% The Class
     
@@ -200,16 +263,16 @@ class ODA:
                  # Bregman divergence
                  Bregman_phi=['phi_Eucl'], # {'phi_Eucl', 'phi_KL'}
                  # Termination
-                 Kmax=[100], 
+                 Kmax=[32], 
                  timeline_limit = 1e6, 
                  error_type = [0], # 0:Clustering, 1:Regression, 2:Classification
                  error_threshold=[0.01], 
                  error_threshold_count=[2], 
                  # Temperature
                  Tmax=[0.9], 
-                 Tmin=[1e-4],
-                 gamma_schedule=[[0.1,0.5]], 
-                 gamma_steady=[0.8], 
+                 Tmin=[1e-2],
+                 gamma_schedule=[[0.8,0.8]], 
+                 gamma_steady=[0.95], 
                  # Tree Structure
                  node_id=[0], 
                  parent=None, 
@@ -231,10 +294,6 @@ class ODA:
                  jit = True
                  ):
         
-        # if not train_data_x:
-        #    print("Please provide at least one data sample for initialization.")
-        #    return
-        
         ### Tree-Structure Parameters
         
         self.id = node_id.copy()
@@ -249,6 +308,7 @@ class ODA:
 
         ### Objective weights
         self.observe_xy = observe_xy[self.mylayer]
+        self.observe_xy_arxiv = [observe_xy[0]] * self.nlayers if len(observe_xy)==1 else observe_xy.copy()
         
         ### Keep archive to pass multi-resolution parameters to children
         # !!! Revisit copy vs deepcopy here
@@ -296,6 +356,7 @@ class ODA:
         self.px = []
         self.sx= []
         self.last_x = []
+        self.last_y = []
 
         # Termination
         self.Kmax = Kmax[self.mylayer] 
@@ -393,10 +454,13 @@ class ODA:
         perturb_param = self.perturb_param_arxiv
         effective_neighborhood = self.effective_neighborhood_arxiv
         em_convergence = self.em_convergence_arxiv
-        self.e_p = self.BregmanD(np.array(x_init),np.array(x_init+perturb_param[self.mylayer]))            
-        self.e_n = self.BregmanD(np.array(x_init),np.array(x_init+effective_neighborhood[self.mylayer]))            
-        self.e_c = self.BregmanD(np.array(x_init),np.array(x_init+em_convergence[self.mylayer]))            
-    
+        # self.e_p = self.BregmanD(np.array(x_init),np.array(x_init+perturb_param[self.mylayer]))            
+        # self.e_n = self.BregmanD(np.array(x_init),np.array(x_init+effective_neighborhood[self.mylayer]))            
+        # self.e_c = self.BregmanD(np.array(x_init),np.array(x_init+em_convergence[self.mylayer]))            
+        self.e_p = self.BregmanD(np.atleast_1d(0),np.atleast_1d(0+perturb_param[self.mylayer]))            
+        self.e_n = self.BregmanD(np.atleast_1d(0),np.atleast_1d(0+effective_neighborhood[self.mylayer]))            
+        self.e_c = self.BregmanD(np.atleast_1d(0),np.atleast_1d(0+em_convergence[self.mylayer]))            
+
         self.myK = [self.K]
         self.myT = [self.T]
         self.myX = [self.x.copy()]
@@ -675,6 +739,7 @@ class ODA:
 
         # Prepare for update
         self.last_x = self.x.copy()
+        self.last_y = self.y.copy()
         self.low_p_warnings = 0 # unused?
         datum_x = datum_x[self.layers[self.mylayer]]
 
@@ -797,10 +862,23 @@ class ODA:
                 self.convergence_counter += 1
         else:
             
-            conv_reached = np.all([self.BregmanD(np.array(self.last_x[i]),np.array(self.x[i])) < \
+            # conv_reached = np.all([self.BregmanD(np.array(self.last_x[i]),np.array(self.x[i])) < \
+            #                 self.Temp()*self.e_c * (1+self.bb_init)/(1+self.bb)
+            #                                                 for i in range(self.K)])  
+            
+            # last_mu = np.array([np.concatenate(z) for z in list(zip(self.last_x,self.last_y))], dtype=DTYPE)
+            # mu = np.array([np.concatenate(z) for z in list(zip(self.x,self.y))], dtype=DTYPE)
+            # conv_reached = np.all([self.BregmanD(np.array(last_mu[i]),np.array(mu[i])) < \
+            #                 self.Temp()*self.e_c * (1+self.bb_init)/(1+self.bb)
+            #                                                 for i in range(self.K)])  
+            
+            weight_x = 1-self.observe_xy
+            weight_y = self.observe_xy
+            conv_reached = np.all([weight_x*self.BregmanD(self.last_x[i],self.x[i]) 
+                            + weight_y*self.BregmanD(self.last_y[i],self.y[i]) < 
                             self.Temp()*self.e_c * (1+self.bb_init)/(1+self.bb)
                                                             for i in range(self.K)])  
-                
+            
             if conv_reached:
                 
                 if self.convergence_counter > self.convergence_counter_threshold:
@@ -870,8 +948,15 @@ class ODA:
         while i<self.K:
             for j in reversed(np.arange(i+1,self.K)):
                 
-                merged = self.BregmanD(np.array(self.x[i]),np.array(self.x[j]))< \
-                            self.Temp()*self.e_n and self.labels[i]==self.labels[j]
+                # merged = self.BregmanD(np.array(self.x[i]),np.array(self.x[j]))< \
+                #             self.Temp()*self.e_n and self.labels[i]==self.labels[j]
+                
+                weight_x = 1-self.observe_xy
+                weight_y = self.observe_xy
+                d = weight_x*self.BregmanD(self.x[i],self.x[j]) \
+                    + weight_y*self.BregmanD(self.y[i],self.y[j])
+                
+                merged = d < self.Temp()*self.e_n and self.labels[i]==self.labels[j]
                             
                 if merged:
                     
@@ -994,6 +1079,11 @@ class ODA:
             self.children.append(ODA(
                 # Data
                 # No data given. Child will be initialized with the first sample.
+                #  train_data_x=None, 
+                #  train_data_y=None, 
+                #  train_labels=None,
+                # Probability domain
+                observe_xy = self.observe_xy_arxiv, 
                 # Layers
                 layers = self.layers,
                 # Bregman divergence
@@ -1287,7 +1377,7 @@ class ODA:
         
     # Find best representative, predict y, predict label
     ###########################################################################
-    def predict(self, datum_x, recursive=1e3):
+    def predict_x(self, datum_x, recursive=1e3):
     
         x = self.myX[-1]
         j,_ = self.winner(x, datum_x[self.layers[self.mylayer]])
@@ -1297,6 +1387,22 @@ class ODA:
         
         return self.myX[-1][j], self.myY[-1][j], self.myLabels[-1][j], j
         # if len(self.myX)>0 else None
+
+    def predict(self, data_x, recursive=1e3):
+    
+        hatX = []
+        hatY = []
+        hatLabel = []
+        hatMode = []
+
+        for datum_x in data_x: 
+            hX, hY, hL, w = self.predict_x(datum_x, recursive=recursive)
+            hatX.append(hX)
+            hatY.append(hY)
+            hatLabel.append(hL)
+            hatMode.append(w)
+        
+        return hatX, hatY, hatLabel, hatMode
 
     # Return Codebook
     ###########################################################################
@@ -1736,14 +1842,20 @@ def _dBregmanD(x, y, phi='phi_Eucl'):
 
 
 
-
-
-#%%
-
 """
-Tree-Structured (Multi-Resolution) Online Deterministic Annealing for Classification and Clustering
-Christos Mavridis,
-Department of Electrical Engineering and Computer Science, 
-KTH Royal Institute of Technology
-<mavridis@kth.se>
+
+Tree-Structured (Multi-Resolution) Online Deterministic Annealing for 
+Clustering, Regression, Classification, and Hybrid System Identification
+
+Christos Mavridis 
+
+School of Electrical and Computer Engineering, University of Maryland, College Park and
+Department of Electrical Engineering and Computer Science, KTH Royal Institute of Technology
+
+< mavridis (at) kth.se >
+< c.n.mavridis (at) gmail.com >
+
+https://mavridischristos.github.io/
+https://github.com/MavridisChristos
+
 """

@@ -36,7 +36,7 @@ plot_domain = True
 # ODA Parameters 
 
 layers = [1]
-observe_xy = False
+observe_xy = [0.5]
 
 Tmax = [0.9,1e-1,1e-2]
 Tmin = [1e-2,1e-2,5*1e-4]
