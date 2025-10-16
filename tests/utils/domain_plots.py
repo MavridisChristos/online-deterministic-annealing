@@ -13,6 +13,7 @@ Department of Electrical and Computer Engineering, University of Maryland
 
 import numpy as np
 import matplotlib.pyplot as plt
+from tests.utils import bounded_voronoi as bvoronoi
 
 import os
 # from oda import ODA 
@@ -332,6 +333,24 @@ def plt_oda(clf, train_data, train_labels, res, plot_counter=1, bias=0,
         # Plot Centroids
         if len(centroids[0])<2:
             centroids = [proj_back(cd) for cd in centroids]
+
+        # Bounded Voronoi
+        if len(centroids)>1:
+            if len(centroids)<4:
+                vcentroids = centroids.copy() + [np.array([-10,-10]), np.array([10,10])]
+            else:
+                vcentroids = centroids.copy()
+            
+            lower = 0.0
+            upper = 1.0
+            bounding_polygon = np.array([[lower, lower], [lower, upper], [upper, upper], [upper, lower]])
+            regions = bvoronoi.bounded_voronoi(vcentroids,bounding_polygon,radius=20)
+            regions = regions[:len(centroids)]
+
+            # plot
+            for r,region in enumerate(regions):
+                bvoronoi.voronoi_plot_2d(ax,region,color='gray', width=1) # vcentroids[r]
+
         for i in range(len(centroids)):
             # centroids
             if clabels[i]==0:
@@ -343,7 +362,7 @@ def plt_oda(clf, train_data, train_labels, res, plot_counter=1, bias=0,
     title=f'Obs.: {clf.myLoops[clf.plt_counter]:04d}, T = .{int(clf.myT[clf.plt_counter]*10000):04d}, ' \
               f'K = {root.myTreeK[plot_counter]:03d}'
         
-    plt.text(0.5, 0.015, title, horizontalalignment='center',verticalalignment='center', fontsize=12,fontweight='bold')    
+    plt.text(0.5, 0.025, title, horizontalalignment='center',verticalalignment='center', fontsize=12,fontweight='bold')    
     if len(clf.myTrainError)>clf.plt_counter:
         if len(clf.classes)>1:
             acctxt = f'Acc.: {1-clf.myTrainError[clf.plt_counter][2]:.3f}'

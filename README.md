@@ -8,11 +8,15 @@
 
 > A hierarchical, multi-resolution learning model. 
 
-> Applications include online clustering, classification, regression, reinforcement learning, hybrid system identification, graph partitioning, and leader detection.
+> **Applications:** Real-time clustering, classification, regression, (state-aggregation) reinforcement learning, hybrid system identification, graph partitioning, leader detection.
 
 ## pip install
 
 	pip install online-deterministic-annealing
+
+Current Version: 
+
+    version = "1.0.1"
 
 Dependencies: 
 
@@ -20,8 +24,18 @@ Dependencies:
     "numpy>=2.2.6",
     "numba>=0.61.2",
     "matplotlib>=3.10.3",
+    "scipy>=1.16.2",
+    "shapely>=2.1.2",
     ]
     requires-python = ">=3.8"
+
+License: 
+
+    license = "MIT"
+
+## Demo
+
+https://github.com/MavridisChristos/online-deterministic-annealing/tests/demo.py
 
 ## Usage 
 
@@ -364,7 +378,7 @@ If you use this work in an academic context, please cite the following:
         journal = {arXiv preprint arXiv:2212.08189},
         year = {2024},
     }
-    
+
 ## Author 
 
 Christos N. Mavridis, Ph.D. \
