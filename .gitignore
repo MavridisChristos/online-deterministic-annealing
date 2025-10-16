@@ -1,6 +1,3 @@
-tests-dev/
-README-dev.txt
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
