@@ -1383,7 +1383,7 @@ class ODA:
         j,_ = self.winner(x, datum_x[self.layers[self.mylayer]])
         
         if recursive>0 and len(self.children) > 0 and len(self.children[j].myX)>1:
-            return self.children[j].predict(datum_x,recursive-1)
+            return self.children[j].predict_x(datum_x,recursive-1)
         
         return self.myX[-1][j], self.myY[-1][j], self.myLabels[-1][j], j
         # if len(self.myX)>0 else None
